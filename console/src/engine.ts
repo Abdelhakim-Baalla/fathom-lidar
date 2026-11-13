@@ -275,27 +275,41 @@ export class Engine {
     this.post({ type: 'resetTracks' })
     this.revCount = 0
     this.emit({ replay: { ...this.state.replay, index }, tracks: [] })
-    if (!this.state.running) this.ingest(this.replayFrames[index].slice(0), null, 0, false)
+    if (this.state.running) this.playReplay()
+    else this.ingest(this.replayFrames[index].slice(0), null, 0, false)
   }
 
+  /** Play from the current index, pinned to the wall clock so processing time never slows playback. */
   private playReplay(): void {
     clearTimeout(this.replayTimer)
-    const r = this.state.replay
-    if (!r) return
+    const start = this.state.replay
+    if (!start) return
+    const startWall = performance.now()
+    const startT = decodeFrame(this.replayFrames[start.index]).timestamp
     const step = () => {
       const r = this.state.replay
       if (!r || !this.state.running) return
-      const i = r.index >= r.frames - 1 ? 0 : r.index + 1
-      if (i === 0) {
-        this.views?.cloud.clear()
-        this.post({ type: 'resetTracks' })
+      const due = startT + (performance.now() - startWall) / 1000
+      let i = r.index
+      // Deliver every frame whose time has come.
+      while (i < r.frames && decodeFrame(this.replayFrames[i]).timestamp <= due) {
+        this.ingest(this.replayFrames[i].slice(0), null, 0, false)
+        i++
       }
-      const cur = decodeFrame(this.replayFrames[r.index])
-      const next = decodeFrame(this.replayFrames[i])
-      this.ingest(this.replayFrames[r.index].slice(0), null, 0, false)
+      if (i >= r.frames) {
+        // Loop after a short pause, starting clean.
+        this.state = { ...this.state, replay: { ...r, index: 0 } }
+        this.replayTimer = window.setTimeout(() => {
+          this.views?.cloud.clear()
+          this.post({ type: 'resetTracks' })
+          this.revCount = 0
+          this.t0 = null
+          this.playReplay()
+        }, 600)
+        return
+      }
       this.state = { ...this.state, replay: { ...r, index: i } }
-      const wait = i === 0 ? 400 : Math.max(1, Math.min(200, (next.timestamp - cur.timestamp) * 1000))
-      this.replayTimer = window.setTimeout(step, wait)
+      this.replayTimer = window.setTimeout(step, 8)
     }
     step()
   }
