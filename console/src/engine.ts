@@ -15,8 +15,12 @@ export interface Stats {
   perceptionMs: number
   pointsHeld: number
   frameId: number
+  /** seconds since the current source started */
   time: number
   simulated: boolean
+  /** what an external source has shown so far: highest ring + 1 and farthest return */
+  seenChannels: number
+  seenRange: number
 }
 
 export interface EngineState {
@@ -60,6 +64,8 @@ export class Engine {
   private revCount = 0
 
   private statsTimer = 0
+  private t0: number | null = null
+  private seen = { channels: 0, range: 0 }
   private window = { start: performance.now(), points: 0, rays: 0, revs: 0 }
 
   state: EngineState = {
@@ -75,7 +81,7 @@ export class Engine {
     ego: { x: 0, y: 0 },
     stats: {
       pointsPerSecond: 0, returnRate: 0, revolutionsPerSecond: 0, perceptionMs: 0,
-      pointsHeld: 0, frameId: 0, time: 0, simulated: true,
+      pointsHeld: 0, frameId: 0, time: 0, simulated: true, seenChannels: 0, seenRange: 0,
     },
   }
 
@@ -145,6 +151,7 @@ export class Engine {
   }
 
   restartSimulation(): void {
+    this.t0 = null
     this.views?.cloud.clear()
     this.post({ type: 'restart' })
     this.emit({ tracks: [] })
@@ -158,6 +165,9 @@ export class Engine {
     this.post({ type: 'run', running: true })
     this.views?.cloud.setOutline(this.outline)
     this.views?.cloud.setRunning(true)
+    this.views?.cloud.setMaxRange(this.sensor.maxRange)
+    this.views?.range.setChannels(this.sensor.channels)
+    this.views?.range.setMaxRange(this.sensor.maxRange)
     this.emit({ source: 'simulator', running: true, tracks: [] })
   }
 
@@ -203,6 +213,8 @@ export class Engine {
     clearTimeout(this.replayTimer)
     this.post({ type: 'run', running: false })
     this.revCount = 0
+    this.t0 = null
+    this.seen = { channels: 0, range: 0 }
     if (this.state.replay) this.emit({ replay: null })
     if (this.state.bridge !== 'idle') this.emit({ bridge: 'idle', bridgeMessage: '' })
   }
@@ -317,8 +329,9 @@ export class Engine {
     this.window.points += f.pointCount
     this.window.rays += rays
     if (f.flags & FLAG_REVOLUTION_END) this.window.revs++
+    if (this.t0 === null) this.t0 = f.timestamp
     this.state.stats.frameId = f.frameId
-    this.state.stats.time = f.timestamp
+    this.state.stats.time = f.timestamp - this.t0
     this.state.stats.simulated = (f.flags & FLAG_SIMULATED) !== 0
 
     if (external || this.state.source === 'recording') this.gatherForPerception(f)
@@ -326,17 +339,31 @@ export class Engine {
 
   private gatherForPerception(f: Frame): void {
     const c = Math.cos(f.yaw), s = Math.sin(f.yaw)
+    const seen = this.seen
     for (let i = 0; i < f.pointCount && this.revCount * 3 < this.rev.length; i++) {
       const x = f.f32[i * 4], y = f.f32[i * 4 + 1], z = f.f32[i * 4 + 2]
+      const ring = f.u8[i * 16 + 13] + 1
+      if (ring > seen.channels) seen.channels = ring
+      const r = x * x + y * y + z * z
+      if (r > seen.range) seen.range = r
       const o = this.revCount++ * 3
       this.rev[o] = f.x + c * x - s * y
       this.rev[o + 1] = f.y + s * x + c * y
       this.rev[o + 2] = f.z + z
     }
     if (f.flags & FLAG_REVOLUTION_END) {
+      // Fit the views to what the device actually delivers.
+      const range = Math.max(10, Math.ceil(Math.sqrt(seen.range) / 10) * 10)
+      if (this.views && (seen.channels !== this.state.stats.seenChannels || range !== this.state.stats.seenRange)) {
+        this.views.range.setChannels(Math.max(1, seen.channels))
+        this.views.range.setMaxRange(range)
+        this.views.cloud.setMaxRange(range)
+      }
+      this.state.stats.seenChannels = seen.channels
+      this.state.stats.seenRange = range
       const points = this.rev.slice(0, this.revCount * 3)
       this.post(
-        { type: 'perceive', points, count: this.revCount, x: f.x, y: f.y, time: f.timestamp, range: 120 },
+        { type: 'perceive', points, count: this.revCount, x: f.x, y: f.y, time: f.timestamp, range },
         [points.buffer],
       )
       this.revCount = 0

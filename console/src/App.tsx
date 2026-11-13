@@ -231,35 +231,48 @@ export default function App() {
           <input ref={fileInput} type="file" accept=".fthm" hidden onChange={(e) => { openFile(e.target.files?.[0]); e.target.value = '' }} />
         </section>
 
-        <section aria-disabled={!sim}>
+        {sim ? (
+          <>
+        <section>
           <h2>Sensor</h2>
           <label className="field">
             <span>Beam layout</span>
-            <select value={presetId} onChange={(e) => choosePreset(e.target.value)} disabled={!sim}>
+            <select value={presetId} onChange={(e) => choosePreset(e.target.value)}>
               {PRESETS.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </label>
-          <Slider label="Rotation rate" value={sensor.rateHz} min={5} max={20} step={1} unit="Hz" disabled={!sim}
+          <Slider label="Rotation rate" value={sensor.rateHz} min={5} max={20} step={1} unit="Hz"
             hint={`${fmt1.format(azimuthStepDeg(sensor))}° between columns`}
             onChange={(v) => setSensor({ ...sensor, rateHz: v })} />
-          <Slider label="Maximum range" value={sensor.maxRange} min={40} max={200} step={10} unit="m" disabled={!sim}
+          <Slider label="Maximum range" value={sensor.maxRange} min={40} max={200} step={10} unit="m"
             onChange={(v) => setSensor({ ...sensor, maxRange: v })} />
-          <Slider label="Range noise, 1σ" value={Math.round(sensor.rangeNoise * 100)} min={0} max={15} step={1} unit="cm" disabled={!sim}
+          <Slider label="Range noise, 1σ" value={Math.round(sensor.rangeNoise * 100)} min={0} max={15} step={1} unit="cm"
             onChange={(v) => setSensor({ ...sensor, rangeNoise: v / 100 })} />
           <p className="note">{fmt.format(pointsPerSecond(sensor))} rays per second at {sensor.channels} channels.</p>
         </section>
 
-        <section aria-disabled={!sim}>
+        <section>
           <h2>Environment</h2>
-          <fieldset className="seg" aria-label="Weather" disabled={!sim}>
+          <fieldset className="seg" aria-label="Weather">
             {(['clear', 'rain', 'fog'] as Weather[]).map((w) => (
               <label key={w}><input type="radio" name="weather" checked={env.weather === w} onChange={() => setEnv({ ...env, weather: w })} /><span>{w[0].toUpperCase() + w.slice(1)}</span></label>
             ))}
           </fieldset>
-          <Slider label="Vehicle speed" value={Math.round(env.egoSpeed * 3.6)} min={0} max={50} step={5} unit="km/h" disabled={!sim}
+          <Slider label="Vehicle speed" value={Math.round(env.egoSpeed * 3.6)} min={0} max={50} step={5} unit="km/h"
             onChange={(v) => setEnv({ ...env, egoSpeed: v / 3.6 })} />
         </section>
 
+          </>
+        ) : (
+          <section>
+            <h2>Sensor</h2>
+            <p className="note">
+              {s.stats.seenChannels > 0
+                ? <>Configured on the device. Seen so far: {s.stats.seenChannels} channels, returns out to {s.stats.seenRange} m.</>
+                : 'Configured on the device. Its channel count and range appear here once frames arrive.'}
+            </p>
+          </section>
+        )}
         <section>
           <h2>Display</h2>
           <label className="field">
@@ -365,7 +378,7 @@ export default function App() {
         <figure className="rangeimg">
           <canvas ref={rangeCanvas} aria-label="Range image: one row per channel, one column per bearing" />
           <figcaption>
-            <span>Range image · {sensor.channels} channels × 360°</span>
+            <span>Range image · {sim ? sensor.channels : s.stats.seenChannels || '–'} channels × 360°</span>
             <span className="num">frame {fmt.format(s.stats.frameId)} · t {fmt1.format(s.stats.time)} s</span>
           </figcaption>
         </figure>
