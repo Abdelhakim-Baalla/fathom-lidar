@@ -1,0 +1,19 @@
+[project]
+name = "fathom-bridge"
+version = "0.1.0"
+description = "Reads LiDAR sensor packets and forwards FTHM frames to the Fathom console over WebSocket."
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26", "websockets>=12"]
+
+[project.scripts]
+fathom-bridge = "fathom_bridge.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
