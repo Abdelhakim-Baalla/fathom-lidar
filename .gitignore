@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.impeccable/mocks/
+.impeccable/review/
+.impeccable/decision.json
+.impeccable/build/
+__pycache__/
+.venv/
+.pytest_cache/
+*.fthm
+.DS_Store
