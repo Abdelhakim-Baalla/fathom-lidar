@@ -44,7 +44,7 @@ export const PRESETS: SensorPreset[] = [
   { id: 'c128', name: '128 channels, +15° to −25°', config: { ...base, channels: 128, fovUp: 15, fovDown: -25, rateHz: 10, range10: 100, maxRange: 120 } },
 ]
 
-export const DEFAULT_ENVIRONMENT: Environment = { weather: 'clear', egoSpeed: 8 }
+export const DEFAULT_ENVIRONMENT: Environment = { weather: 'clear', egoSpeed: 30 / 3.6 }
 
 /** Beam elevations in radians, lowest first, evenly spread over the field of view. */
 export function beamElevations(c: SensorConfig): Float32Array {

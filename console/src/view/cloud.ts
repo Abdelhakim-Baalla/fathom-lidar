@@ -294,7 +294,7 @@ export class CloudView {
   }
 
   private updateRamp(): void {
-    this.rampTex.image.data.set(buildRamp(PALETTES[this.palette], this.mode))
+    this.rampTex.image.data!.set(buildRamp(PALETTES[this.palette], this.mode))
     const f = this.mode === 'truth' || this.mode === 'ring' ? THREE.NearestFilter : THREE.LinearFilter
     this.rampTex.magFilter = this.rampTex.minFilter = f
     this.rampTex.needsUpdate = true
@@ -530,9 +530,9 @@ export class CloudView {
     el.style.transform = `translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`
   }
 
-  /** Contour distances, set like chart soundings along the bearing to the viewer's right. */
+  /** Contour distances, set like chart soundings along a bearing ahead of the viewer, a little to the right. */
   private drawSoundings(cameraAz: number): void {
-    const b = cameraAz + Math.PI / 2 + 0.35
+    const b = cameraAz + Math.PI + 0.42
     const bands = Math.ceil(this.maxRange / CONTOUR_STEP)
     for (let i = 0; i < bands; i++) {
       const r = Math.min(this.maxRange, (i + 1) * CONTOUR_STEP)
