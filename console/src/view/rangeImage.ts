@@ -72,8 +72,10 @@ export class RangeImage {
   push(f: Frame): void {
     if (f.pointCount === 0) return
     // Columns swept by this frame are cleared first, so missing returns show as gaps.
+    // Sensors spin either way; the shorter arc between first and last column is the sweep.
     const a0 = f.u16[7], a1 = f.u16[(f.pointCount - 1) * 8 + 7]
-    const c0 = Math.floor((a0 / 36000) * COLUMNS), c1 = Math.floor((a1 / 36000) * COLUMNS)
+    let c0 = Math.floor((a0 / 36000) * COLUMNS), c1 = Math.floor((a1 / 36000) * COLUMNS)
+    if ((c1 - c0 + COLUMNS) % COLUMNS > COLUMNS / 2) [c0, c1] = [c1, c0]
     for (let c = c0; c !== (c1 + 1) % COLUMNS; c = (c + 1) % COLUMNS) {
       for (let r = 0; r < this.channels; r++) this.range[r * COLUMNS + c] = 0
     }
