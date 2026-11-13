@@ -45,6 +45,7 @@ export class Tracker {
 
   reset(): void {
     this.tracks = []
+    this.nextId = 1
     this.lastTime = null
   }
 
@@ -82,7 +83,7 @@ export class Tracker {
     detections.forEach((d, di) => {
       if (usedD.has(di)) return
       this.tracks.push({
-        id: this.nextId++,
+        id: 0,
         x: d.x, y: d.y, z: d.z, vx: 0, vy: 0,
         length: d.length, width: d.width, height: d.height, yaw: d.yaw,
         cls: d.cls, age: 0, hits: 1, misses: 0, points: d.points,
@@ -91,8 +92,10 @@ export class Tracker {
     })
     this.tracks = this.tracks.filter((t) => t.misses <= MAX_MISSES)
 
+    // Numbers are handed out on confirmation, so the table counts real objects.
+    for (const t of this.tracks) if (t.id === 0 && t.hits >= CONFIRM_HITS) t.id = this.nextId++
     return this.tracks
-      .filter((t) => t.hits >= CONFIRM_HITS && t.misses <= 2)
+      .filter((t) => t.id > 0 && t.misses <= 2)
       .map(({ votes: _votes, ...t }) => t)
   }
 

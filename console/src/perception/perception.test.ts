@@ -72,6 +72,7 @@ describe('tracker', () => {
       )
     }
     expect(out).toHaveLength(1)
+    expect(out[0].id).toBe(1)
     expect(out[0].vx).toBeCloseTo(8, 0)
     expect(Math.abs(out[0].vy)).toBeLessThan(0.3)
     expect(out[0].cls).toBe(CLASS.car)
