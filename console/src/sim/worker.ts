@@ -16,7 +16,7 @@ export type ToWorker =
 export type FromWorker =
   | { type: 'outline'; boxes: Float32Array }
   | { type: 'packet'; frame: ArrayBuffer; truth: Uint8Array; rays: number }
-  | { type: 'tracks'; tracks: Track[]; time: number; ms: number }
+  | { type: 'tracks'; tracks: Track[]; time: number; ms: number; x: number; y: number }
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope
 const post = (m: FromWorker, transfer: Transferable[] = []) => ctx.postMessage(m, transfer)
@@ -39,7 +39,7 @@ function sendOutline(): void {
 function perceive(points: Float32Array, count: number, x: number, y: number, time: number, range: number): void {
   const t0 = performance.now()
   const tracks = tracker.update(detect(points, count, x, y, range), time)
-  post({ type: 'tracks', tracks, time, ms: performance.now() - t0 })
+  post({ type: 'tracks', tracks, time, ms: performance.now() - t0, x, y })
 }
 
 function tick(): void {
