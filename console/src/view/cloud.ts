@@ -7,7 +7,6 @@ THREE.ColorManagement.enabled = false
 
 const CAPACITY = 1_600_000
 const MAX_TRACKS = 96
-const CONTOUR_STEP = 20
 const MODE_INDEX: Record<ColorMode, number> = { range: 0, intensity: 1, height: 2, ring: 3, truth: 4 }
 
 const VERT = /* glsl */ `
@@ -65,7 +64,7 @@ export class CloudView {
 
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
-  private camera = new THREE.PerspectiveCamera(42, 1, 0.5, 900)
+  private camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900)
   private labels: HTMLElement
   private host: HTMLElement
 
@@ -107,6 +106,8 @@ export class CloudView {
   private selected: number | null = null
 
   private rig = { theta: 0, phi: 1.02, dist: 58, yaw: Math.PI / 2 }
+  /** camera distances are authored for a 120 m sensor and scale with the range in use */
+  private scale = 1
   private goal = { ...PRESET_GOALS.chase }
   private target = new THREE.Vector3(3, 10, 0)
   private raf = 0
@@ -338,8 +339,15 @@ export class CloudView {
   }
 
   /** Depth tints and range contours, rebuilt when the palette or the range changes. */
+  /** Contour interval: about six bands whatever the range. */
+  private get step(): number {
+    const raw = this.maxRange / 6
+    return [1, 2, 5, 10, 20, 25, 50].find((s) => s >= raw) ?? 50
+  }
+
   private rebuildChart(): void {
     const p = PALETTES[this.palette]
+    const CONTOUR_STEP = this.step
     for (const g of [this.tintGroup, this.contourGroup]) {
       for (const c of [...g.children]) {
         const o = c as THREE.Mesh
@@ -373,7 +381,7 @@ export class CloudView {
     const ticks: THREE.Vector3[] = []
     for (let d = 0; d < 360; d += 10) {
       const a = (d * Math.PI) / 180
-      const r0 = this.maxRange, r1 = this.maxRange + (d % 30 === 0 ? 3.2 : 1.4)
+      const r0 = this.maxRange, r1 = this.maxRange * (d % 30 === 0 ? 1.027 : 1.012)
       ticks.push(new THREE.Vector3(Math.cos(a) * r0, Math.sin(a) * r0, 0.02), new THREE.Vector3(Math.cos(a) * r1, Math.sin(a) * r1, 0.02))
     }
     const tickLines = new THREE.LineSegments(
@@ -435,7 +443,7 @@ export class CloudView {
   }
 
   private zoom(factor: number): void {
-    this.goal.dist = Math.min(320, Math.max(8, this.goal.dist * factor))
+    this.goal.dist = Math.min(320, Math.max(6, this.goal.dist * factor))
   }
 
   private pick(x: number, y: number): void {
@@ -490,18 +498,21 @@ export class CloudView {
     this.rig.theta += (this.goal.theta - this.rig.theta) * k
     this.rig.phi += (this.goal.phi - this.rig.phi) * k
     this.rig.dist += (this.goal.dist - this.rig.dist) * k
+    this.scale += (Math.max(0.12, this.maxRange / 120) - this.scale) * k
+    const dist = this.rig.dist * this.scale
     const a = (this.goal.headingUp ? this.rig.yaw + Math.PI : -Math.PI / 2) + this.rig.theta
     const sp = Math.sin(this.rig.phi)
     this.camera.position.set(
-      this.target.x + this.rig.dist * sp * Math.cos(a),
-      this.target.y + this.rig.dist * sp * Math.sin(a),
-      this.target.z + this.rig.dist * Math.cos(this.rig.phi),
+      this.target.x + dist * sp * Math.cos(a),
+      this.target.y + dist * sp * Math.sin(a),
+      this.target.z + dist * Math.cos(this.rig.phi),
     )
     this.camera.lookAt(this.target)
 
     this.chart.position.set(e.x, e.y, this.ground)
     this.egoMark.position.set(e.x, e.y, this.ground)
     this.egoMark.rotation.z = e.yaw
+    this.egoMark.scale.setScalar(Math.min(1, this.scale * 2.5))
     this.sweep.position.set(e.x, e.y, e.z)
     this.sweep.rotation.z = e.yaw + this.sweepAz
     this.sweep.scale.setScalar(this.maxRange)
@@ -533,6 +544,7 @@ export class CloudView {
   /** Contour distances, set like chart soundings along a bearing ahead of the viewer, a little to the right. */
   private drawSoundings(cameraAz: number): void {
     const b = cameraAz + Math.PI + 0.42
+    const CONTOUR_STEP = this.step
     const bands = Math.ceil(this.maxRange / CONTOUR_STEP)
     for (let i = 0; i < bands; i++) {
       const r = Math.min(this.maxRange, (i + 1) * CONTOUR_STEP)
