@@ -80,6 +80,7 @@ export interface EngineState {
 
 const MAX_RECORDED_BYTES = 400 * 1024 * 1024
 const MAX_EXHIBITS = 400
+const LOG_AFTER_HITS = 8
 
 /**
  * Moves frames from a source (simulator worker, bridge WebSocket or a recording)
@@ -251,14 +252,40 @@ export class Engine {
       if (ex) {
         ex.end = now
         ex.cls = t.cls
-      } else {
-        this.trackExhibit.set(t.id, this.addExhibit({ kind: 'object', start: now, end: now, open: true, trackId: t.id, cls: t.cls }))
-        this.cues.play('exhibit')
+        ex.at = { x: t.x, y: t.y }
+      } else if (t.hits >= LOG_AFTER_HITS) {
+        // Logged once eight revolutions have seen it: flickers at long range never become exhibits.
+        // A track that reappears where an exhibit was just lost is the same object: keep its number.
+        const back = this.recentlyLost(t, now)
+        if (back) {
+          back.open = true
+          back.trackId = t.id
+          back.end = now
+          back.at = { x: t.x, y: t.y }
+          this.trackExhibit.set(t.id, back)
+        } else {
+          this.trackExhibit.set(t.id, this.addExhibit({
+            kind: 'object', start: now, end: now, open: true, trackId: t.id, cls: t.cls, at: { x: t.x, y: t.y },
+          }))
+          this.cues.play('exhibit')
+        }
       }
     }
     for (const [id, ex] of this.trackExhibit) {
-      if (!seen.has(id) && ex.open) ex.open = false
+      if (!seen.has(id)) {
+        ex.open = false
+        this.trackExhibit.delete(id)
+      }
     }
+  }
+
+  private recentlyLost(t: Track, now: number): Exhibit | undefined {
+    for (let i = this.register.length - 1, seen = 0; i >= 0 && seen < 80; i--, seen++) {
+      const e = this.register[i]
+      if (e.kind !== 'object' || e.open || !e.at || now - e.end > 4) continue
+      if (Math.hypot(e.at.x - t.x, e.at.y - t.y) < 2.5) return e
+    }
+    return undefined
   }
 
   /** Close every open object exhibit and forget track numbers: the tracker restarts. */
@@ -355,6 +382,9 @@ export class Engine {
   }
 
   private onCsi(t: number, amp: Float32Array, rssi: number): void {
+    if (this.wifiPackets === 0 && this.state.wifi.mode === 'esp32' && this.state.wifi.link === 'open') {
+      this.state.wifi.message = `Receiving CSI from the ESP32 on ${amp.length} subcarriers`
+    }
     this.motion.push(t, amp)
     this.wifiPackets++
     this.state.wifi.rssi = rssi
@@ -650,9 +680,28 @@ export class Engine {
     // A still scan of a place is kept whole and never tracked: the classes are for streets.
     if (f.flags & FLAG_SCAN) {
       if (!this.state.accumulating) this.emit({ accumulating: true, tracks: [] })
+      this.fitScan(f)
       return
     }
     if (external || this.state.source === 'recording') this.gatherForPerception(f)
+  }
+
+  /** Fit rings, colours and camera to the size of the room being scanned. */
+  private fitScan(f: Frame): void {
+    let r2 = this.seen.range
+    for (let i = 0; i < f.pointCount; i++) {
+      const x = f.f32[i * 4], y = f.f32[i * 4 + 1], z = f.f32[i * 4 + 2]
+      const d = x * x + y * y + z * z
+      if (d > r2) r2 = d
+    }
+    this.seen.range = r2
+    const range = Math.max(2, Math.ceil(Math.sqrt(r2)))
+    if (range !== this.state.stats.seenRange) {
+      this.views?.cloud.setMaxRange(range)
+      this.views?.range.setMaxRange(range)
+      this.views?.range.setChannels(64)
+      this.state.stats.seenRange = range
+    }
   }
 
   private gatherForPerception(f: Frame): void {

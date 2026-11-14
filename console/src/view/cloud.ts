@@ -604,9 +604,11 @@ export class CloudView {
       this.markers.set(id, el)
     }
     const s = this.project(x, y, z)
-    el.hidden = !s
-    if (!s) return
-    const n = String(this.exhibitOf(id) ?? '·')
+    const exhibit = this.exhibitOf(id)
+    // Only logged exhibits carry a marker; a box alone means the track is still being confirmed.
+    el.hidden = !s || exhibit === undefined
+    if (!s || exhibit === undefined) return
+    const n = String(exhibit)
     const tent = el.firstElementChild as HTMLElement
     if (tent.textContent !== n) tent.textContent = n
     el.classList.toggle('is-selected', selected)

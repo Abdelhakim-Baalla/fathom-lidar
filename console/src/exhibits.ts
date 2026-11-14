@@ -25,6 +25,8 @@ export interface Exhibit {
   trackId?: number
   /** the class the track had when last seen, for closed object exhibits */
   cls?: number
+  /** last known position of an object, metres in the odometry frame */
+  at?: { x: number; y: number }
   sound?: SoundEvent
   wifi?: { peak: number; source: 'simulated' | 'esp32' }
   seal?: Seal
