@@ -1,5 +1,5 @@
 import type { Frame } from '../protocol/frame'
-import { PALETTES, type PaletteId } from './palettes'
+import { PALETTE } from './palettes'
 
 const COLUMNS = 900 // 0.4° per column
 
@@ -25,7 +25,7 @@ export class RangeImage {
     this.ctx = canvas.getContext('2d')!
     this.image = this.ctx.createImageData(COLUMNS, 32)
     this.setChannels(32)
-    this.setPalette('day')
+    this.loadPalette()
     const loop = () => {
       this.raf = requestAnimationFrame(loop)
       if (this.dirty) this.paint()
@@ -52,8 +52,8 @@ export class RangeImage {
     this.dirty = true
   }
 
-  setPalette(id: PaletteId): void {
-    const p = PALETTES[id]
+  private loadPalette(): void {
+    const p = PALETTE
     const stops = p.ramps.range.map((c) => {
       const n = parseInt(c.slice(1), 16)
       return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
@@ -64,7 +64,7 @@ export class RangeImage {
       const u = f - k
       for (let c = 0; c < 3; c++) this.ramp[i * 3 + c] = stops[k][c] + (stops[k + 1][c] - stops[k][c]) * u
     }
-    const n = parseInt(p.tints[0].slice(1), 16)
+    const n = parseInt('#121619'.slice(1), 16)
     this.water = [(n >> 16) & 255, (n >> 8) & 255, n & 255]
     this.dirty = true
   }

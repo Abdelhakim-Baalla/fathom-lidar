@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 import type { Track } from '../perception/track'
 import type { Frame } from '../protocol/frame'
-import { buildRamp, HEIGHT_MAX, PALETTES, type ColorMode, type PaletteId } from './palettes'
+import { buildRamp, HEIGHT_MAX, PALETTE, type ColorMode } from './palettes'
 
 THREE.ColorManagement.enabled = false
 
@@ -13,7 +13,7 @@ const VERT = /* glsl */ `
 attribute vec4 aMeta;   // intensity 0..255, ring, range in metres, capture time in seconds
 attribute float aLabel;
 uniform sampler2D uRamp;
-uniform vec3 uWater;
+uniform vec3 uFade;
 uniform float uNow, uPersist, uSize, uPx, uMaxRange, uGround, uHeightMax;
 uniform int uMode;
 varying vec3 vColor;
@@ -27,8 +27,8 @@ void main() {
   else if (uMode == 3) t = mod(aMeta.y, 2.0) < 0.5 ? 0.25 : 0.75;
   else t = (aLabel * 16.0 + 8.0) / 255.0;
   vec3 c = texture2D(uRamp, vec2(clamp(t, 0.002, 0.998), 0.5)).rgb;
-  // Old returns sink back into the water instead of popping out.
-  vColor = mix(c, uWater, smoothstep(0.55, 1.0, age / uPersist) * 0.8);
+  // Old returns sink into the dark instead of popping out.
+  vColor = mix(c, uFade, smoothstep(0.55, 1.0, age / uPersist) * 0.8);
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
   gl_PointSize = uSize * uPx * clamp(42.0 / max(-mv.z, 1.0), 0.6, 2.4);
@@ -42,24 +42,26 @@ void main() {
   gl_FragColor = vec4(vColor, 1.0);
 }`
 
-export type CameraPreset = 'chase' | 'chart' | 'side'
+export type CameraPreset = 'chase' | 'plan' | 'side'
 
 const PRESET_GOALS: Record<CameraPreset, { theta: number; phi: number; dist: number; headingUp: boolean }> = {
   chase: { theta: 0, phi: 1.02, dist: 58, headingUp: true },
-  chart: { theta: 0, phi: 0.03, dist: 150, headingUp: false },
+  plan: { theta: 0, phi: 0.03, dist: 150, headingUp: false },
   side: { theta: 1.2, phi: 1.32, dist: 70, headingUp: true },
 }
 
 export interface Layers {
-  contours: boolean
+  rings: boolean
   tracks: boolean
   sweep: boolean
   outline: boolean
 }
 
-/** WebGL view of the point cloud with chart overlays. Owns its canvas and a DOM label layer. */
+/** WebGL view of the point cloud with range rings and exhibit markers. Owns its canvas and a DOM label layer. */
 export class CloudView {
   onSelect: (id: number | null) => void = () => {}
+  /** exhibit number for a track, assigned by the engine's register */
+  exhibitOf: (trackId: number) => number | undefined = () => undefined
   pointsHeld = 0
 
   private renderer: THREE.WebGLRenderer
@@ -79,13 +81,11 @@ export class CloudView {
   private rampTex: THREE.DataTexture
   private write = 0
 
-  private palette: PaletteId = 'day'
   private mode: ColorMode = 'range'
-  private layers: Layers = { contours: true, tracks: true, sweep: true, outline: false }
+  private layers: Layers = { rings: true, tracks: true, sweep: true, outline: false }
   private maxRange = 120
 
-  private chart = new THREE.Group() // follows the ego, north up
-  private tintGroup = new THREE.Group()
+  private chart = new THREE.Group() // follows the sensor, north up
   private contourGroup = new THREE.Group()
   private egoMark: THREE.LineLoop
   private sweep: THREE.Line
@@ -114,6 +114,7 @@ export class CloudView {
   private lastFrame = performance.now()
   private observer: ResizeObserver
   private pool: HTMLElement[] = []
+  private markers = new Map<number, HTMLElement>()
   private used = 0
   private v = new THREE.Vector3()
   private reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -139,7 +140,7 @@ export class CloudView {
       fragmentShader: FRAG,
       uniforms: {
         uRamp: { value: this.rampTex },
-        uWater: { value: new THREE.Color() },
+        uFade: { value: new THREE.Color() },
         uNow: { value: 0 },
         uPersist: { value: 0.3 },
         uSize: { value: 2.2 },
@@ -177,10 +178,10 @@ export class CloudView {
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.16, depthWrite: false }),
     )
     this.selection.visible = false
-    this.chart.add(this.tintGroup, this.contourGroup)
+    this.chart.add(this.contourGroup)
     this.scene.add(this.chart, this.egoMark, this.sweep, this.outline, this.boxes, this.selection)
 
-    this.setPalette('day')
+    this.applyPalette()
     this.rebuildChart()
     this.bindPointer(canvas)
     this.observer = new ResizeObserver(() => this.resize())
@@ -196,6 +197,7 @@ export class CloudView {
     this.geometry.dispose()
     this.material.dispose()
     this.labels.replaceChildren()
+    this.markers.clear()
   }
 
   // ── Data ────────────────────────────────────────────────────────────────
@@ -247,6 +249,8 @@ export class CloudView {
     this.pointsHeld = 0
     this.geometry.setDrawRange(0, 0)
     this.tracks = []
+    for (const el of this.markers.values()) el.remove()
+    this.markers.clear()
   }
 
   setTracks(tracks: Track[], time: number): void {
@@ -269,23 +273,21 @@ export class CloudView {
 
   // ── Appearance ──────────────────────────────────────────────────────────
 
-  setPalette(id: PaletteId): void {
-    this.palette = id
-    const p = PALETTES[id]
-    this.renderer.setClearColor(p.water)
-    ;(this.material.uniforms.uWater.value as THREE.Color).set(p.water)
+  private applyPalette(): void {
+    const p = PALETTE
+    this.renderer.setClearColor(p.ground)
+    ;(this.material.uniforms.uFade.value as THREE.Color).set(p.ground)
     const set = (o: THREE.Line | THREE.LineSegments, color: string, opacity: number) => {
       const m = o.material as THREE.LineBasicMaterial
       m.color.set(color)
       m.opacity = opacity
     }
     set(this.egoMark, p.ink, 1)
-    set(this.sweep, p.ink, 0.35)
-    set(this.outline, p.outline, id === 'day' ? 0.22 : 0.28)
-    set(this.boxes, p.computed, 1)
-    ;(this.selection.material as THREE.MeshBasicMaterial).color.set(p.computed)
+    set(this.sweep, p.ink, 0.3)
+    set(this.outline, p.outline, 0.3)
+    set(this.boxes, p.exhibit, 1)
+    ;(this.selection.material as THREE.MeshBasicMaterial).color.set(p.exhibit)
     this.updateRamp()
-    this.rebuildChart()
   }
 
   setColorMode(mode: ColorMode): void {
@@ -295,7 +297,7 @@ export class CloudView {
   }
 
   private updateRamp(): void {
-    this.rampTex.image.data!.set(buildRamp(PALETTES[this.palette], this.mode))
+    this.rampTex.image.data!.set(buildRamp(PALETTE, this.mode))
     const f = this.mode === 'truth' || this.mode === 'ring' ? THREE.NearestFilter : THREE.LinearFilter
     this.rampTex.magFilter = this.rampTex.minFilter = f
     this.rampTex.needsUpdate = true
@@ -318,7 +320,7 @@ export class CloudView {
 
   setLayers(l: Layers): void {
     this.layers = l
-    this.chart.visible = l.contours
+    this.chart.visible = l.rings
     this.sweep.visible = l.sweep
     this.outline.visible = l.outline
     this.boxes.visible = l.tracks
@@ -338,17 +340,16 @@ export class CloudView {
     )
   }
 
-  /** Depth tints and range contours, rebuilt when the palette or the range changes. */
-  /** Contour interval: about six bands whatever the range. */
+  /** Ring interval: about six rings whatever the range. */
   private get step(): number {
     const raw = this.maxRange / 6
     return [1, 2, 5, 10, 20, 25, 50].find((s) => s >= raw) ?? 50
   }
 
   private rebuildChart(): void {
-    const p = PALETTES[this.palette]
+    const p = PALETTE
     const CONTOUR_STEP = this.step
-    for (const g of [this.tintGroup, this.contourGroup]) {
+    for (const g of [this.contourGroup]) {
       for (const c of [...g.children]) {
         const o = c as THREE.Mesh
         o.geometry.dispose()
@@ -359,12 +360,6 @@ export class CloudView {
     const bands = Math.ceil(this.maxRange / CONTOUR_STEP)
     for (let i = 0; i < bands; i++) {
       const outer = Math.min(this.maxRange, (i + 1) * CONTOUR_STEP)
-      const tint = new THREE.Mesh(
-        new THREE.RingGeometry(i * CONTOUR_STEP, outer, 128),
-        new THREE.MeshBasicMaterial({ color: p.tints[Math.min(i, p.tints.length - 1)], depthWrite: false, depthTest: false }),
-      )
-      tint.renderOrder = -10
-      this.tintGroup.add(tint)
       const pts: THREE.Vector3[] = []
       for (let k = 0; k < 180; k++) {
         const a = (k / 180) * Math.PI * 2
@@ -372,7 +367,7 @@ export class CloudView {
       }
       const ring = new THREE.LineLoop(
         new THREE.BufferGeometry().setFromPoints(pts),
-        new THREE.LineBasicMaterial({ color: p.contour, transparent: true, opacity: i === bands - 1 ? 0.9 : 0.55, depthTest: false }),
+        new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: i === bands - 1 ? 1 : 0.7, depthTest: false }),
       )
       ring.renderOrder = -9
       this.contourGroup.add(ring)
@@ -386,7 +381,7 @@ export class CloudView {
     }
     const tickLines = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(ticks),
-      new THREE.LineBasicMaterial({ color: p.contour, transparent: true, opacity: 0.9, depthTest: false }),
+      new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: 1, depthTest: false }),
     )
     tickLines.renderOrder = -9
     this.contourGroup.add(tickLines)
@@ -518,7 +513,7 @@ export class CloudView {
     this.sweep.scale.setScalar(this.maxRange)
 
     this.used = 0
-    if (this.layers.contours) this.drawSoundings(a)
+    if (this.layers.rings) this.drawRangeMarks(a)
     this.drawTracks(simNow)
     for (let i = this.used; i < this.pool.length; i++) this.pool[i].hidden = true
 
@@ -541,8 +536,8 @@ export class CloudView {
     el.style.transform = `translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`
   }
 
-  /** Contour distances, set like chart soundings along a bearing ahead of the viewer, a little to the right. */
-  private drawSoundings(cameraAz: number): void {
+  /** Ring distances along a bearing ahead of the viewer, a little to the right. */
+  private drawRangeMarks(cameraAz: number): void {
     const b = cameraAz + Math.PI + 0.42
     const CONTOUR_STEP = this.step
     const bands = Math.ceil(this.maxRange / CONTOUR_STEP)
@@ -550,7 +545,7 @@ export class CloudView {
       const r = Math.min(this.maxRange, (i + 1) * CONTOUR_STEP)
       this.labelAt(
         this.ego.x + Math.cos(b) * r, this.ego.y + Math.sin(b) * r, this.ground,
-        i === bands - 1 ? `${r} m` : `${r}`, 'sounding',
+        `${r} m`, 'rangemark',
       )
     }
   }
@@ -558,6 +553,7 @@ export class CloudView {
   private drawTracks(simNow: number): void {
     const lead = Math.max(0, Math.min(0.25, simNow - this.tracksTime))
     const pts: number[] = []
+    const live = new Set<number>()
     let sel: Track | null = null
     if (this.layers.tracks) {
       for (const t of this.tracks.slice(0, MAX_TRACKS)) {
@@ -572,7 +568,14 @@ export class CloudView {
         }
         const selected = t.id === this.selected
         if (selected) sel = { ...t, x, y }
-        this.labelAt(x, y, t.z + t.height / 2 + 0.4, trackName(t.id), selected ? 'track is-selected' : 'track')
+        live.add(t.id)
+        this.placeMarker(t.id, x, y, t.z + t.height / 2 + 0.3, selected)
+      }
+    }
+    for (const [id, el] of this.markers) {
+      if (!live.has(id)) {
+        el.remove()
+        this.markers.delete(id)
       }
     }
     this.boxPositions.set(pts)
@@ -585,6 +588,29 @@ export class CloudView {
       this.selection.scale.set(sel.length + 0.3, sel.width + 0.3, sel.height + 0.3)
       this.selection.rotation.z = sel.yaw
     }
+  }
+
+  /**
+   * A numbered scene marker standing on the object. Markers are keyed by track,
+   * so each one keeps its element and drops in once, when the track is confirmed.
+   */
+  private placeMarker(id: number, x: number, y: number, z: number, selected: boolean): void {
+    let el = this.markers.get(id)
+    if (!el) {
+      el = document.createElement('span')
+      el.className = 'marker'
+      el.innerHTML = '<span class="marker__tent"></span>'
+      this.labels.appendChild(el)
+      this.markers.set(id, el)
+    }
+    const s = this.project(x, y, z)
+    el.hidden = !s
+    if (!s) return
+    const n = String(this.exhibitOf(id) ?? '·')
+    const tent = el.firstElementChild as HTMLElement
+    if (tent.textContent !== n) tent.textContent = n
+    el.classList.toggle('is-selected', selected)
+    el.style.transform = `translate(${s.x.toFixed(1)}px, ${s.y.toFixed(1)}px)`
   }
 }
 

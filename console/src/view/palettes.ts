@@ -1,16 +1,25 @@
 import { CLASS } from '../sim/scene'
 
-export type PaletteId = 'day' | 'dusk' | 'night'
 export type ColorMode = 'range' | 'intensity' | 'height' | 'ring' | 'truth'
 
-/** Colours the 3D view needs; the shell reads the same values from CSS custom properties. */
+/**
+ * Colours the canvases need. The shell reads the same values from CSS custom
+ * properties in index.css; keep the two in step.
+ */
 export interface Palette {
-  water: string
+  /** the scene's background: an unlit evidence room */
+  ground: string
   ink: string
-  contour: string
-  /** depth tints, nearest band first */
-  tints: string[]
-  computed: string
+  /** range rings and distance marks */
+  scale: string
+  /** exhibits: markers, boxes, selection */
+  exhibit: string
+  /** recording, seals */
+  seal: string
+  /** Wi-Fi data */
+  radio: string
+  /** acoustic data */
+  sound: string
   outline: string
   ramps: Record<Exclude<ColorMode, 'truth'>, string[]>
   /** retroreflector colour, used above intensity 100 */
@@ -18,63 +27,33 @@ export interface Palette {
   classes: Record<number, string>
 }
 
-const light: Pick<Palette, 'ramps' | 'retro' | 'classes'> = {
+export const PALETTE: Palette = {
+  ground: '#090b0c',
+  ink: '#ebe5d6',
+  scale: '#3b4348',
+  exhibit: '#f2c230',
+  seal: '#e0332f',
+  radio: '#5b86ff',
+  sound: '#ebe5d6',
+  outline: '#8a9196',
   ramps: {
-    range: ['#0a2b45', '#1b5f8c', '#3f8fb5', '#7fb2c8'],
-    intensity: ['#bdb7a2', '#8b8d85', '#48545e', '#121c26'],
-    height: ['#66757c', '#2c7a52', '#84952a', '#bf8a18', '#a34e28', '#6c281b'],
-    ring: ['#14202b', '#2b7fb8'],
+    // Near returns bright label-stock, far returns sink into the locker grey.
+    range: ['#d9d3c4', '#a3b1b4', '#627985', '#34495a'],
+    intensity: ['#2a3237', '#59656b', '#a3a69c', '#efe8d6'],
+    height: ['#59656b', '#4f9a86', '#a8b85a', '#e1b248', '#e27c4a', '#d0503f'],
+    ring: ['#ebe5d6', '#7f95a0'],
   },
-  retro: '#c27700',
+  retro: '#f2c230',
   classes: {
-    [CLASS.ground]: '#a3a79f',
-    [CLASS.building]: '#2c4a63',
-    [CLASS.vegetation]: '#2c7a52',
-    [CLASS.pole]: '#7a5a2a',
-    [CLASS.car]: '#1d66a8',
-    [CLASS.truck]: '#c2571a',
-    [CLASS.pedestrian]: '#c0262d',
-    [CLASS.cyclist]: '#0e8686',
-    [CLASS.weather]: '#cbc5b2',
-  },
-}
-
-const dark: Pick<Palette, 'ramps' | 'retro' | 'classes'> = {
-  ramps: {
-    range: ['#e9f5fa', '#8cc6e2', '#4390b6', '#28607f'],
-    intensity: ['#2c3943', '#5f6c72', '#a9a896', '#f4ecd6'],
-    height: ['#74838a', '#4db583', '#b7c84c', '#f0b93c', '#e27c4a', '#cf5a42'],
-    ring: ['#efe7cf', '#5aa9d6'],
-  },
-  retro: '#ffc34d',
-  classes: {
-    [CLASS.ground]: '#5a676d',
-    [CLASS.building]: '#8fb4d1',
-    [CLASS.vegetation]: '#4db583',
+    [CLASS.ground]: '#4a5257',
+    [CLASS.building]: '#9aa9b2',
+    [CLASS.vegetation]: '#4f9a86',
     [CLASS.pole]: '#c9a467',
-    [CLASS.car]: '#5aa9e6',
-    [CLASS.truck]: '#f0894a',
-    [CLASS.pedestrian]: '#ff6b6b',
-    [CLASS.cyclist]: '#3fd0c9',
-    [CLASS.weather]: '#3d4a52',
-  },
-}
-
-export const PALETTES: Record<PaletteId, Palette> = {
-  day: {
-    water: '#f6f8f3', ink: '#14202b', contour: '#2b6f96',
-    tints: ['#b5d6e9', '#c9e1ee', '#dcecf2', '#eaf3f4'],
-    computed: '#a61b82', outline: '#14202b', ...light,
-  },
-  dusk: {
-    water: '#1c2730', ink: '#ece4cc', contour: '#6aa6c6',
-    tints: ['#25485f', '#223f52', '#203746', '#1e2f3b'],
-    computed: '#f472c8', outline: '#ece4cc', ...dark,
-  },
-  night: {
-    water: '#070c10', ink: '#cfc8b0', contour: '#3f7896',
-    tints: ['#0f2c3d', '#0d2432', '#0b1c27', '#09151d'],
-    computed: '#e65cb8', outline: '#cfc8b0', ...dark,
+    [CLASS.car]: '#5b86ff',
+    [CLASS.truck]: '#e27c4a',
+    [CLASS.pedestrian]: '#f2c230',
+    [CLASS.cyclist]: '#3fc4bb',
+    [CLASS.weather]: '#2e363b',
   },
 }
 
@@ -90,7 +69,7 @@ export const CLASS_NAMES: Record<number, string> = {
   [CLASS.weather]: 'Droplet',
 }
 
-function hex(c: string): [number, number, number] {
+export function hex(c: string): [number, number, number] {
   const n = parseInt(c.slice(1), 16)
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
 }
@@ -123,6 +102,14 @@ export function buildRamp(p: Palette, mode: ColorMode): Uint8Array {
     out.set([rgb[0], rgb[1], rgb[2], 255], i * 4)
   }
   return out
+}
+
+/** A ramp sampled at t in 0..1, as an rgb() string, for 2D canvases. */
+export function rampColor(stops: string[], t: number): [number, number, number] {
+  const s = stops.map(hex)
+  const f = Math.min(0.9999, Math.max(0, t)) * (s.length - 1)
+  const k = Math.floor(f), u = f - k
+  return [0, 1, 2].map((c) => Math.round(s[k][c] + (s[k + 1][c] - s[k][c]) * u)) as [number, number, number]
 }
 
 /** Top of the height scale, metres above the road. */
