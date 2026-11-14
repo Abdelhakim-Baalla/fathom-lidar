@@ -1,9 +1,12 @@
 [project]
 name = "fathom-bridge"
 version = "0.1.0"
-description = "Reads LiDAR sensor packets and forwards FTHM frames to the Fathom console over WebSocket."
+description = "Forwards LiDAR packets, ESP32 Wi-Fi CSI and phone scans to the Fathom console over WebSocket."
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.26", "websockets>=12"]
+
+[project.optional-dependencies]
+csi = ["pyserial>=3.5"]
 
 [project.scripts]
 fathom-bridge = "fathom_bridge.__main__:main"
