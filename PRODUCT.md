@@ -41,7 +41,11 @@ Desktop browser, mouse and keyboard, a large viewport. Used for exploration and 
 - Ground removal, clustering, bounding boxes and tracking across frames.
 - Recording and replay of frames.
 - Hardware input through the bridge; first target protocol is the Velodyne VLP-16 data packet.
-- No real hardware is available today: everything shown comes from the simulator and must be labelled as simulated.
+- Wi-Fi channel state sensing (requested by the user): a multipath simulation of one link in a room, and an ESP32 running esp-csi through the bridge. Detects motion near the link; does not locate or count people.
+- Microphone sound event detection (requested by the user): likely class, dBFS level, left/right bearing from two channels. Interface sounds, off by default.
+- Room scans from an Android phone through WebXR depth sensing (requested by the user), relayed to a desktop through the bridge.
+- Every detection is logged as a numbered exhibit; recordings are sealed with their SHA-256. The visual world is an investigative evidence unit, with no real agency's name or marks.
+- No LiDAR or ESP32 hardware is available today: the LiDAR drive and the Wi-Fi room come from simulators and must be labelled as simulated. Microphone and phone scan input are real; estimated or heuristic results (sound classes, ARCore depth) say so.
 - Undecided: additional sensor protocols (Ouster, Livox), ROS 2 integration, a C++ core.
 
 ## Evidence on Hand
