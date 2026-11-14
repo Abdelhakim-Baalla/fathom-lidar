@@ -11,6 +11,7 @@ VERSION = 1
 HEADER = struct.Struct("<4sHHIId3ff")  # 40 bytes
 FLAG_SIMULATED = 1 << 0
 FLAG_REVOLUTION_END = 1 << 1
+FLAG_SCAN = 1 << 2  # points accumulate into a still scan; do not track
 
 POINT = np.dtype(
     [

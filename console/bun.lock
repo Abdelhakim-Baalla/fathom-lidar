@@ -5,7 +5,9 @@
     "": {
       "name": "fathom-console",
       "dependencies": {
-        "@fontsource-variable/archivo": "^5.3.0",
+        "@fontsource-variable/jetbrains-mono": "^5.3.0",
+        "@fontsource-variable/sofia-sans": "^5.3.0",
+        "@fontsource/sofia-sans-extra-condensed": "^5.3.0",
         "react": "^19.3.1",
         "react-dom": "^19.3.1",
         "three": "^0.187.0",
@@ -15,6 +17,7 @@
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "@types/three": "^0.187.0",
+        "@vitejs/plugin-basic-ssl": "^2.3.0",
         "@vitejs/plugin-react": "^6.1.2",
         "oxlint": "^1.90.0",
         "typescript": "~7.0.2",
@@ -32,7 +35,11 @@
 
     "@emnapi/wasi-threads": ["@emnapi/wasi-threads@2.2.0", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-JP7OYH38Q7+pyTAe14raZHLQIK7BDKbdwji+Xi3pcd/6QkJYQH3SX4wu6EplGrGJWRepoNzedfm0G3B9Z4e9Rw=="],
 
-    "@fontsource-variable/archivo": ["@fontsource-variable/archivo@5.3.0", "", {}, "sha512-HogK8FJelrD1o7TlZlkIVtHgc20bO5PZRWE7mUeUTdMN055alznQV6/00J00IBeu8FQAH4s3zW9UJNvKExXf+g=="],
+    "@fontsource-variable/jetbrains-mono": ["@fontsource-variable/jetbrains-mono@5.3.0", "", {}, "sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw=="],
+
+    "@fontsource-variable/sofia-sans": ["@fontsource-variable/sofia-sans@5.3.0", "", {}, "sha512-lVLpBgrjxSMjrrBF70Jr9qBLdFac5tDAvVn9oHlS+vAaVyhUN6dWmr0nNjWzwTh6tYIECP45h4zDfllQbXtqtA=="],
+
+    "@fontsource/sofia-sans-extra-condensed": ["@fontsource/sofia-sans-extra-condensed@5.3.0", "", {}, "sha512-2e4gWBJn8sUJMoQx6VTpXIlPIezZpyjJLEstaSZb9nOkQLwP8+kr48dOJEYVo0t3iqCYvQUjbpLIbpgPICfmkw=="],
 
     "@jridgewell/resolve-uri": ["@jridgewell/resolve-uri@3.1.3", "", {}, "sha512-lhTtjtoEArWBjismtfS761S9Hlyn+nIZqOZVYoZ1Xn82PMNMVnk+jj/NhC4fAXGTs7ydONcJiR5vyQBTMDu27g=="],
 
@@ -177,6 +184,8 @@
     "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
+
+    "@vitejs/plugin-basic-ssl": ["@vitejs/plugin-basic-ssl@2.3.0", "", { "peerDependencies": { "vite": "^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-bdyo8rB3NnQbikdMpHaML9Z1OZPBu6fFOBo+OtxsBlvMJtysWskmBcnbIDhUqgC8tcxNv/a+BcV5U+2nQMm1OQ=="],
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@6.3.0", "", { "dependencies": { "@rolldown/pluginutils": "^1.0.1" }, "peerDependencies": { "@rolldown/plugin-babel": "^0.1.7 || ^0.2.0 || ^0.3.0", "babel-plugin-react-compiler": "^1.0.0", "oxc-transform-react": ">=0.152.0 <0.157.0", "vite": "^8.0.0" }, "optionalPeers": ["@rolldown/plugin-babel", "babel-plugin-react-compiler", "oxc-transform-react"] }, "sha512-H9E955aVvD2F4zNHCw4eIZbIfF6xKldlh7MNu+hSU7xwQzh65lI/N+CJWqmfhi0PEjDXIt/H7T7J/4wU63KJiw=="],
 

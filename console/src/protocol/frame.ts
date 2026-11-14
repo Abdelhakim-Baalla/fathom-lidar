@@ -24,6 +24,8 @@ export const POINT_BYTES = 16
 
 export const FLAG_SIMULATED = 1 << 0
 export const FLAG_REVOLUTION_END = 1 << 1
+/** points accumulate into a still scan of a place: keep them all and do not track objects */
+export const FLAG_SCAN = 1 << 2
 
 export interface FrameHeader {
   flags: number
