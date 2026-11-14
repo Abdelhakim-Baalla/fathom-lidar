@@ -9,22 +9,22 @@ related_targets: []
 
 Scope: the single working screen of Fathom. Mode: Operate.
 
-Audience and job: a reviewer, engineer or student watching a spinning LiDAR measure a street, changing the sensor and reading what was detected. Constraints: desktop first, 60 fps with up to 2.3 M points per second, everything simulated is labelled as simulated.
+Audience and job: a reviewer, engineer or student watching three sensors at once (a spinning LiDAR, Wi-Fi channel state, a microphone), reading what each detected and keeping a sealed record. Constraints: desktop first and usable on an Android phone for the room scan; 60 fps with up to 2.3 M points per second; everything simulated is labelled simulated; estimated or heuristic results say so.
 
-Memorable moment: the scan sweeping over a chart-tinted ground while range contours carry their distances like soundings.
+Memorable moment: yellow numbered evidence markers standing on each tracked object in the live scan, with the same numbers in the exhibit register and on the evidence timeline.
 
-Unresolved: additional pages (recordings library, sensor datasheet view) are not built; the console holds recording and source controls inline.
+Unresolved: recordings library and per-exhibit report export are not built.
 
 ## Direction contract
 
-THESIS: LiDAR is sounding with light, so the console is set in the language of the hydrographic chart. It refuses the near-black viewer with a rainbow ramp and one neon accent.
+THESIS: The console handles sensor output the way an evidence unit handles a scene: every detection becomes a numbered exhibit with its proof beside it, every recording is sealed with its hash. It refuses the grey robotics viewer with a rainbow ramp and the neon hacker HUD.
 
-OWN-WORLD: buff chart paper for the shell, ink navy for the bar and text, stepped depth-tint blues under the point cloud, hypsometric greens and browns for height, amber for retroreflectors. Chart magenta is reserved for everything computed: detections, tracks, selection. Archivo, upright for labels, italic for measured values, condensed for table heads. Day, Dusk and Night palettes.
+OWN-WORLD: Gunmetal locker greys for the shell, label-stock off-white for exhibit labels and primary ink, scene-marker yellow for exhibits (markers, boxes, numbers), seal-tape red only for recording, seals and the simulated badge, forensic-light blue for Wi-Fi data. Sofia Sans for text with tabular figures, Sofia Sans Extra Condensed for headings and marker numerals, a mono only for hashes. Square corners, 2 px radius at most. One 8 px cell module (Crouwel raise).
 
-STORY: the visitor sees what the sensor measures, changes a parameter and sees the physics answer, then selects a tracked object and reads its range and speed.
+STORY: The visitor sees the scan with markers, reads exhibits in the register, watches Wi-Fi and acoustic lanes on one evidence timeline, records, and gets a sealed exhibit with its SHA-256.
 
-FIRST VIEWPORT: 48 px ink bar (name, source, simulated badge, palette switch); 288 px left rail of standard controls (sensor, environment, display); the point cloud fills the centre, nothing overlapping it but projected labels; 320 px right panel with the tracked-object table and selected-object detail; bottom strip with the range image and transport. Primary action: pause/resume in the bottom strip.
+FIRST VIEWPORT: 56 px bar (wordmark, case number, three feed chips, sound toggle, simulated badge); 272 px left control rail; scan in the centre with markers; 336 px exhibit register on the right with selected-exhibit detail; 208 px bottom strip: transport, tabbed instrument (range image, Wi-Fi CSI, acoustic spectrogram) and the three-lane evidence timeline with bar length equal to real duration (Labanotation raise). Primary action: pause/resume. Acoustic lock-on inverts its lane for one frame (Ikeda raise). Each exhibit lists points, SNR or confidence beside it (Monochrome-product raise).
 
-FORM: Sounding Chart, position 5 of 7; seed:f806b26dc8447f70. Signature move: range contours labelled as soundings over stepped depth tints. Motion: state changes in 150 to 250 ms, eased camera moves, palette crossfade; no load choreography.
+FORM: Chain of Custody, position 6 of 7; seed:bf86b997cdcb44f2. Signature move: numbered scene markers on tracked objects, one numbering across register, timeline and seals. Motion: 120 to 220 ms state changes, marker drop on confirmation, seal stamp on recording stop; no load choreography.
 
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
