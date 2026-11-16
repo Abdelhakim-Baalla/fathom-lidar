@@ -181,10 +181,13 @@ export class Simulator {
             if (hit.detail > 0 && hitAxis < 2) {
               const wz = oz + dz * t
               const seed = tint(hit.cx * 0.13, hit.cy * 0.17)
-              const f = facadeAt(hit.detail, hitU, wz, seed)
+              const f = facadeAt(hit.detail, hitU, wz, seed, hit.refl)
               if (f.refl >= 0) {
                 refl = f.refl
-                if (f.recess > 0) t += f.recess / Math.max(0.16, cosInc)
+                // Positive recess moves the return into the glass; negative
+                // values stand proud (sills, pilasters, cornices), which gives
+                // the cloud real ledges instead of a painted wall.
+                if (f.recess !== 0) t += f.recess / Math.max(0.16, cosInc)
               }
             }
           } else {
@@ -379,25 +382,34 @@ function facadeFor(seed: number): FacadeParams {
  * fixed per building so bay rhythm, floor height and glazing style differ from
  * one block to the next instead of repeating like wallpaper.
  */
-function facadeAt(detail: number, u: number, v: number, seed: number): { recess: number; refl: number } {
+function facadeAt(
+  detail: number, u: number, v: number, seed: number, wall: number,
+): { recess: number; refl: number } {
   const p = facadeFor(seed)
   if (detail === 3) {
     // Shopfront: tall panes between masonry piers, fascia above, stall riser below.
     const bayW = p.shopBay
     const pier = p.shopPier
-    if (v > 3.02 && v < 3.34) return { recess: 0, refl: tint(u, v) < 0.45 ? 0.95 : 0.3 }
-    if (v > 0.48 && v < 3.0) {
-      const bay = frac(u / bayW)
-      if (bay > pier && bay < 1 - pier) {
-        // Shop glazing is divided by slim frames, and a transom runs above the
-        // door line; both give the ground floor a scale a plain pane cannot.
-        if (Math.abs(v - 2.52) < 0.035) return { recess: 0.02, refl: 0.36 }
-        if (frac(u / 1.55) < 0.07) return { recess: 0.03, refl: 0.36 }
-        const t = tint(u, v)
-        return { recess: 0.2 + t * 0.06, refl: 0.07 + t * 0.07 }
-      }
+    const bay = frac(u / bayW)
+    if (v > 3.06 && v < 3.42) {
+      // Fascia board stands off the wall and carries a bright trim line, so the
+      // ground floor reads as a separate storey from the upper floors.
+      return { recess: -0.1, refl: v > 3.34 || v < 3.1 ? 0.52 : 0.3 }
     }
-    return { recess: 0, refl: 0.32 }
+    if ((bay < pier || bay > 1 - pier) && v < 3.06) {
+      // Masonry piers between the shop windows.
+      return { recess: -0.14, refl: 0.38 + tint(u, v) * 0.08 }
+    }
+    if (v > 0.48 && v < 3.02) {
+      if (Math.abs(v - 2.52) < 0.035) return { recess: -0.02, refl: 0.4 }
+      if (frac(u / 1.55) < 0.07) return { recess: -0.01, refl: 0.4 }
+      // A few units are lit from inside; the rest return almost nothing.
+      if (tint(u * 0.21, v * 0.13) > 0.9) return { recess: 0.16, refl: 1.15 }
+      const t = tint(u, v)
+      return { recess: 0.3 + t * 0.08, refl: 0.035 + t * 0.05 }
+    }
+    // Stall riser: dark painted panel under the glazing.
+    return { recess: 0, refl: 0.26 + tint(u, v) * 0.06 }
   }
   if (detail === 2) {
     // Curtain wall: a tight mullion grid over continuous glass, with an opaque
@@ -406,15 +418,21 @@ function facadeAt(detail: number, u: number, v: number, seed: number): { recess:
     const floorH = p.cwFloor
     const bay = frac(u / bayW)
     const floor = frac(v / floorH)
-    if (floor < 0.09 || floor > 0.92) return { recess: 0, refl: 0.34 }
+    const storey = Math.floor(v / floorH)
+    if (floor < 0.085 || floor > 0.93) {
+      // Spandrel band, with a proud slab edge at its top.
+      return { recess: floor > 0.9 ? -0.06 : -0.02, refl: 0.32 + tint(u * 0.7, v) * 0.08 }
+    }
     if (bay > 0.015 && bay < 0.985) {
       // Mullions stand proud of the glass, with a transom across each storey.
-      if (bay < 0.1 || bay > 0.9) return { recess: 0.02, refl: 0.34 }
-      if (Math.abs(floor - 0.52) < 0.018) return { recess: 0.03, refl: 0.32 }
+      if (bay < 0.095 || bay > 0.905) return { recess: -0.07, refl: 0.46 }
+      if (Math.abs(floor - 0.52) < 0.016) return { recess: -0.04, refl: 0.42 }
+      // A whole lit floor now and then: the office block reads at night.
+      if (tint(seed, storey * 1.37) > 0.82) return { recess: 0.18, refl: 0.72 + tint(u, v) * 0.45 }
       const t = tint(u, v)
-      return { recess: 0.13 + t * 0.04, refl: 0.06 + t * 0.08 }
+      return { recess: 0.24 + t * 0.06, refl: 0.035 + t * 0.06 }
     }
-    return { recess: 0, refl: 0.2 }
+    return { recess: 0, refl: wall * (0.9 + tint(u * 0.5, v * 0.11) * 0.2) }
   }
   // Punched windows on a varied bay. Some blocks use a ribbon window instead:
   // a wide horizontal band that gives the range image long unbroken glazing.
@@ -428,16 +446,27 @@ function facadeAt(detail: number, u: number, v: number, seed: number): { recess:
   const halfW = p.halfW
   const sill = p.sill
   const head = p.head
+
+  // Pilasters break the wall into vertical bays; floor bands cross them. Both
+  // stand proud, which is what catches the scanner on a real block.
+  if (bay < 0.045 || bay > 0.955) return { recess: -0.16, refl: 0.42 + tint(u, v) * 0.08 }
+  if (floor < 0.026 || floor > 0.972) return { recess: -0.1, refl: 0.46 + tint(u * 1.7, v) * 0.06 }
+
   if (floor > sill && floor < head && bay > bayMid - halfW && bay < bayMid + halfW) {
-    // Sill and lintel are brighter edges; the pane is split by slim mullions.
-    if (floor < sill + 0.03 || floor > head - 0.025) return { recess: 0.04, refl: 0.44 }
+    // Sill and lintel stand proud of the glazing; the pane is split by slim
+    // mullions and a few rooms are lit behind it.
+    if (floor < sill + 0.03 || floor > head - 0.025) return { recess: -0.055, refl: 0.5 }
     const across = (bay - bayMid + halfW) * bayW
     const pane = ribbon ? 1.2 : 0.78
-    if (frac(across / pane) < 0.09) return { recess: 0.03, refl: 0.34 }
+    if (frac(across / pane) < 0.09) return { recess: 0.02, refl: 0.38 }
     const litAt = p.litAt
-    if (t > litAt) return { recess: 0.06, refl: 0.62 } // a lit room behind the glass
-    if (t > litAt - 0.07) return { recess: 0.05, refl: 0.26 } // blind part-way down
-    return { recess: 0.22 + t * 0.14, refl: 0.06 + t * 0.08 }
+    if (t > litAt) return { recess: 0.12, refl: 0.95 + t * 0.35 } // a lit room behind the glass
+    if (t > litAt - 0.09) return { recess: 0.14, refl: 0.28 } // blind part-way down
+    return { recess: 0.32 + t * 0.12, refl: 0.03 + t * 0.05 }
   }
-  return { recess: 0, refl: -1 }
+  // Plain wall: grime, patch repairs and weather streaks keep the largest
+  // surfaces from reading as one flat sheet of returns.
+  const grime = tint(u * 0.37, v * 0.21)
+  const streak = tint(u * 0.09, v * 1.7)
+  return { recess: 0, refl: wall * (0.6 + grime * 0.25) * (0.86 + streak * 0.14) }
 }

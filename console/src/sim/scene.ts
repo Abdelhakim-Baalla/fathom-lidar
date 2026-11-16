@@ -100,16 +100,23 @@ export function groundReflectivity(x: number, y: number): number {
     const across = onX ? dx : dy
     const along = onX ? dy : dx
     const acrossPos = onX ? x : y
-    if (across < 0.09) return 0.72 // centre line
-    if (across > 6.72 && across < 6.9) return 0.66 // edge line
+    const fine = hash2(x * 3.1, y * 3.1)
+    const wear = hash2(x * 7.3, y * 5.9)
+    if (across < 0.09) {
+      // A worn centre line, not a perfect strip of vinyl.
+      return wear > 0.09 ? 0.5 + fine * 0.14 : 0.13
+    }
+    if (across > 6.72 && across < 6.9) return wear > 0.08 ? 0.44 + fine * 0.12 : 0.12
     if (along > 9.5 && along < 12.5) {
-      // zebra crossing just before each junction
-      return ((acrossPos % 1) + 1) % 1 < 0.5 ? 0.74 : 0.1
+      // Zebra crossing: 55 cm bars with ragged worn edges, separated by
+      // asphalt. The wear is what keeps close range paint from blowing out.
+      const bar = ((acrossPos % 1.1) + 1.1) % 1.1
+      if (bar < 0.55 && wear > 0.14) return 0.43 + fine * 0.15
+      return 0.095 + fine * 0.02
     }
     // Patched asphalt, wheel polish and the odd drain lid keep the road from
     // reading as one flat band of returns.
     const cell = hash2(Math.floor((onX ? x : y) / 3.2), Math.floor((onX ? y : x) / 3.2))
-    const fine = hash2(x * 3.1, y * 3.1)
     let r = 0.085 + cell * 0.035 + fine * 0.012
     if (across > 2.4 && across < 4.6) r += 0.018 // polished wheel tracks
     if (hash2(Math.floor(x / 7.5), Math.floor(y / 7.5)) > 0.94) r += 0.12 // repair patch
@@ -122,7 +129,8 @@ export function groundReflectivity(x: number, y: number): number {
     const across = dx < WALK_OUTER ? x : y
     const seam = hash2(Math.floor(along / 1.6), Math.floor(across / 1.6))
     const edge = Math.abs((along / 1.6) % 1 - 0.5) > 0.47
-    return edge ? 0.2 : 0.3 + seam * 0.07
+    const grain = hash2(x * 5.3, y * 4.7)
+    return edge ? 0.19 : 0.27 + seam * 0.07 + grain * 0.035
   }
   const park = x > 0 && x < PITCH && y > 0 && y < PITCH
   const mottled = hash2(x * 0.7, y * 0.7)
@@ -130,16 +138,16 @@ export function groundReflectivity(x: number, y: number): number {
     // A ring path and four radial walks give the park a plan, not just grass.
     // Paths are pale compacted gravel, so they read above the lawn.
     const pr = Math.hypot(x - 40, y - 40)
-    if (pr < 5.6) return 0.7 + mottled * 0.08
-    if (pr > 23.1 && pr < 25.3) return 0.68 + mottled * 0.08
+    if (pr < 5.6) return 0.58 + mottled * 0.1
+    if (pr > 23.1 && pr < 25.3) return 0.56 + mottled * 0.1
     if (pr > 5.6 && pr < 25.3) {
       const ang = Math.atan2(y - 40, x - 40)
       const f = ((ang / (Math.PI / 2)) % 1 + 1) % 1
-      if (Math.min(f, 1 - f) * (Math.PI / 2) * pr < 1.15) return 0.68 + mottled * 0.08
+      if (Math.min(f, 1 - f) * (Math.PI / 2) * pr < 1.15) return 0.56 + mottled * 0.1
     }
-    return 0.38 + mottled * 0.16
+    return 0.34 + mottled * 0.18
   }
-  return 0.19 + mottled * 0.08
+  return 0.17 + mottled * 0.09
 }
 
 // ── Ego path: clockwise loop around the park block, driving on the right ───
@@ -287,6 +295,21 @@ function nearJunction(v: number, margin: number): boolean {
   return Math.abs(v - nearestRoad(v)) < margin
 }
 
+/** The elevation of a block that looks onto the nearest street. */
+function streetFace(
+  cx: number, cy: number, fx: number, fy: number,
+): { nx: number; ny: number; x: number; y: number; len: number } | null {
+  const hx = fx / 2, hy = fy / 2
+  const faces = [
+    { d: Math.abs(cx + hx - nearestRoad(cx + hx)), nx: 1, ny: 0, x: cx + hx, y: cy, len: fy },
+    { d: Math.abs(cx - hx - nearestRoad(cx - hx)), nx: -1, ny: 0, x: cx - hx, y: cy, len: fy },
+    { d: Math.abs(cy + hy - nearestRoad(cy + hy)), nx: 0, ny: 1, x: cx, y: cy + hy, len: fx },
+    { d: Math.abs(cy - hy - nearestRoad(cy - hy)), nx: 0, ny: -1, x: cx, y: cy - hy, len: fx },
+  ]
+  faces.sort((a, b) => a.d - b.d)
+  return faces[0].d < 30 ? faces[0] : null
+}
+
 export function buildScene(seed = 7): Scene {
   const rng = new Rng(seed)
   const statics: Prim[] = []
@@ -309,7 +332,7 @@ export function buildScene(seed = 7): Scene {
           const glass = rng.next() < (tall ? 0.55 : 0.1)
           const cx = x0 + wx * (a + 0.5), cy = y0 + wy * (b + 0.5)
           const style = glass ? 2 : 1
-          const refl = glass ? 0.16 : rng.range(0.26, 0.58)
+          const refl = glass ? 0.13 : rng.range(0.22, 0.46)
           const shop = !glass && rng.next() < 0.45
 
           // A recessed shopfront under the upper floors: one strong eave line,
@@ -357,6 +380,54 @@ export function buildScene(seed = 7): Scene {
             ))
           }
           if (h > 38) statics.push(cylinder(cx + fx * 0.2, cy - fy * 0.2, h, h + rng.range(5, 11), 0.07, 0.5, CLASS.pole))
+
+          // Street-facing articulation: balconies, shop canopies and downpipes
+          // are real geometry, so the scanner catches their undersides and
+          // edges instead of reading a single flat facade plane.
+          const face = streetFace(cx, cy, fx, fy)
+          if (face) {
+            const { nx, ny } = face
+            const faceX = face.x, faceY = face.y
+            const along = face.len
+            if (shop) {
+              const ax = faceX + nx * 0.75, ay = faceY + ny * 0.75
+              statics.push(box(ax, ay, 3.62, nx ? 1.4 : 4.4, ny ? 1.4 : 4.4, 0.16, 0, 0.32, CLASS.building))
+              // A pair of canvas awnings over the shopfront glazing.
+              for (const s of [-1, 1]) {
+                const ox = faceX + nx * 0.62 - (ny ? s * along * 0.24 : 0)
+                const oy = faceY + ny * 0.62 + (nx ? s * along * 0.24 : 0)
+                statics.push(box(ox, oy, 2.94, nx ? 1.25 : 3.1, ny ? 1.25 : 3.1, 0.1, 0, 0.46, CLASS.building))
+              }
+            }
+            if (!glass && h < 34) {
+              const floors = Math.min(6, Math.max(2, Math.floor((h - base) / 3.15)))
+              for (let f = 2; f <= floors; f += 2) {
+                for (const s of [-1, 1]) {
+                  const z = base + f * 3.15 - 0.12
+                  const off = 0.62
+                  const ex = faceX + nx * off - (ny ? s * along * 0.22 : 0)
+                  const ey = faceY + ny * off + (nx ? s * along * 0.22 : 0)
+                  statics.push(box(ex, ey, z, nx ? 1.2 : 2.35, ny ? 1.2 : 2.35, 0.15, 0, 0.36, CLASS.building))
+                  statics.push(box(
+                    ex + nx * 0.56, ey + ny * 0.56, z + 0.55,
+                    nx ? 0.06 : 2.35, ny ? 0.06 : 2.35, 0.95, 0, 0.22, CLASS.building,
+                  ))
+                }
+              }
+            }
+            // Rainwater downpipes at the ends of the street elevation.
+            for (const s of [-1, 1]) {
+              const px = faceX + nx * 0.16 - (ny ? s * (along * 0.42) : 0)
+              const py = faceY + ny * 0.16 + (nx ? s * (along * 0.42) : 0)
+              statics.push(cylinder(px, py, 0, h, 0.075, 0.4, CLASS.building))
+            }
+          }
+          if (h < 20 && rng.next() < 0.3) {
+            // Rooftop water tank: a silhouette the skyline lacks otherwise.
+            const tx = cx + rng.range(-fx * 0.2, fx * 0.2)
+            const ty = cy + rng.range(-fy * 0.2, fy * 0.2)
+            statics.push(cylinder(tx, ty, h, h + 2.2, 1.05, 0.3, CLASS.building))
+          }
         }
       }
     }
