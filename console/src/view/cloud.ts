@@ -1,4 +1,10 @@
 import * as THREE from 'three'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import type { Track } from '../perception/track'
 import type { Frame } from '../protocol/frame'
 import { buildRamp, HEIGHT_MAX, PALETTE, type ColorMode } from './palettes'
@@ -13,13 +19,13 @@ const VERT = /* glsl */ `
 attribute vec4 aMeta;   // intensity 0..255, ring, range in metres, capture time in seconds
 attribute float aLabel;
 uniform sampler2D uRamp;
-uniform vec3 uFade;
-uniform float uNow, uPersist, uSize, uPx, uMaxRange, uGround, uHeightMax;
+uniform vec3 uSensor;
+uniform float uNow, uPersist, uSize, uPx, uMaxRange, uGround, uHeightMax, uYaw, uSweepAz;
 uniform int uMode;
 varying vec3 vColor;
 void main() {
   float age = uNow - aMeta.w;
-  if (age > uPersist || age < -0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (age > uPersist || age < -0.5) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
   float t;
   if (uMode == 0) t = aMeta.z / uMaxRange;
   else if (uMode == 1) t = aMeta.x <= 100.0 ? aMeta.x / 100.0 * 0.8 : 0.8 + (aMeta.x - 100.0) / 155.0 * 0.2;
@@ -27,27 +33,88 @@ void main() {
   else if (uMode == 3) t = mod(aMeta.y, 2.0) < 0.5 ? 0.25 : 0.75;
   else t = (aLabel * 16.0 + 8.0) / 255.0;
   vec3 c = texture2D(uRamp, vec2(clamp(t, 0.002, 0.998), 0.5)).rgb;
-  // Old returns sink into the dark instead of popping out.
-  vColor = mix(c, uFade, smoothstep(0.55, 1.0, age / uPersist) * 0.8);
+
+  // Intensity is the return's power: it drives size and brightness the way a
+  // real viewer does. Ground truth keeps the class colours untouched.
+  float i = aMeta.x / 255.0;
+  float physical = uMode == 4 ? 0.0 : 1.0;
+  float retro = smoothstep(0.68, 0.9, i) * physical;
+
+  // The live beam column flashes: returns near the firing azimuth catch the light.
+  vec2 d = position.xy - uSensor.xy;
+  float wa = atan(d.y, d.x);
+  float da = abs(atan(sin(wa - (uYaw + uSweepAz)), cos(wa - (uYaw + uSweepAz))));
+  float flash = smoothstep(0.11, 0.0, da) * step(0.5, length(d)) * physical;
+  float fresh = 1.0 - smoothstep(0.0, 0.11, age);
+
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
-  gl_PointSize = uSize * uPx * clamp(42.0 / max(-mv.z, 1.0), 0.6, 2.4);
+  float depth = max(-mv.z, 1.0);
+  float near = clamp(27.0 / depth, 0.62, 1.35);
+  gl_PointSize = min(uSize * uPx * near * (0.9 + 0.4 * i + 0.6 * flash + 0.3 * fresh + 0.7 * retro), 9.0 * uPx);
+
+  // Old returns and distant returns sink into the dark instead of popping out.
+  // Distance is measured from the sensor, not the camera: a plan view should not
+  // dim the whole city just because the camera is high above it.
+  float fade = 1.0 - smoothstep(0.55, 1.0, age / uPersist) * 0.85;
+  fade *= 1.0 - smoothstep(0.4, 1.0, aMeta.z / uMaxRange) * 0.8;
+
+  // Keep the hierarchy of a survey: structure reads first, the ground is the
+  // chart it stands on, foliage and weather sit back. Truth mode is untouched.
+  float rank = 1.0;
+  if (uMode != 4) {
+    if (aLabel < 0.5) rank = 0.82;
+    else if (aLabel > 0.5 && aLabel < 1.5) rank = 1.12;
+    else if (aLabel > 1.5 && aLabel < 2.5) rank = 0.9;
+    else if (aLabel > 7.5) rank = 0.4;
+  }
+
+  // The sweep front carries a little warmth, like a searchlight crossing the
+  // scene. Retroreflectors burn warm and the freshest returns keep a trace of it.
+  float heat = 0.42 * retro + 0.4 * flash + 0.16 * fresh;
+  vColor = (c * (0.42 + 0.9 * i) * (1.0 + 0.22 * fresh) + vec3(1.0, 0.93, 0.78) * heat) * fade * rank;
 }`
 
 const FRAG = /* glsl */ `
 varying vec3 vColor;
 void main() {
   vec2 c = gl_PointCoord - 0.5;
-  if (dot(c, c) > 0.25) discard;
-  gl_FragColor = vec4(vColor, 1.0);
+  float d2 = dot(c, c);
+  if (d2 > 0.25) discard;
+  float a = smoothstep(0.25, 0.05, d2);
+  if (a < 0.16) discard;
+  gl_FragColor = vec4(vColor, a);
 }`
+
+const VIGNETTE = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      float d = distance(vUv, vec2(0.5));
+      c.rgb *= mix(0.5, 1.0, smoothstep(0.86, 0.24, d));
+      // A trace of night haze above the skyline keeps the unlit room from
+      // reading as a dead rectangle behind the cloud.
+      float sky = smoothstep(0.35, 1.0, vUv.y) * (1.0 - smoothstep(0.08, 0.72, abs(vUv.x - 0.5)));
+      c.rgb += vec3(0.038, 0.048, 0.056) * sky;
+      // A trace of sensor grain keeps the blacks from looking like flat UI.
+      float g = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+      c.rgb += g * 0.012 * (0.25 + 0.75 * (1.0 - smoothstep(0.2, 0.95, d)));
+      gl_FragColor = c;
+    }`,
+}
 
 export type CameraPreset = 'chase' | 'plan' | 'side'
 
-const PRESET_GOALS: Record<CameraPreset, { theta: number; phi: number; dist: number; headingUp: boolean }> = {
-  chase: { theta: 0, phi: 1.02, dist: 58, headingUp: true },
-  plan: { theta: 0, phi: 0.03, dist: 150, headingUp: false },
-  side: { theta: 1.2, phi: 1.32, dist: 70, headingUp: true },
+const PRESET_GOALS: Record<CameraPreset, { theta: number; phi: number; dist: number; headingUp: boolean; ahead: number }> = {
+  chase: { theta: 0, phi: 0.98, dist: 47, headingUp: true, ahead: 15 },
+  plan: { theta: 0, phi: 0.06, dist: 138, headingUp: false, ahead: 0 },
+  side: { theta: 1.32, phi: 1.14, dist: 54, headingUp: true, ahead: 6 },
 }
 
 export interface Layers {
@@ -69,6 +136,9 @@ export class CloudView {
   private camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900)
   private labels: HTMLElement
   private host: HTMLElement
+  private composer: EffectComposer
+  private bloom: UnrealBloomPass
+  private vignette: ShaderPass
 
   private positions = new Float32Array(CAPACITY * 3)
   private meta = new Float32Array(CAPACITY * 4)
@@ -84,15 +154,27 @@ export class CloudView {
   private mode: ColorMode = 'range'
   private layers: Layers = { rings: true, tracks: true, sweep: true, outline: false }
   private maxRange = 120
+  private fovUp = 15
+  private fovDown = -25
 
   private chart = new THREE.Group() // follows the sensor, north up
   private contourGroup = new THREE.Group()
-  private egoMark: THREE.LineLoop
-  private sweep: THREE.Line
+  private rig = new THREE.Group()
+  private drum = new THREE.Group()
+  private beam = new THREE.Group()
+  private beamFan: THREE.LineSegments
+  private beamGround: THREE.Line
+  private aperture: THREE.Mesh
+  private platform: THREE.Group
   private outline: THREE.LineSegments
-  private boxes: THREE.LineSegments
-  private boxPositions = new Float32Array(MAX_TRACKS * 30 * 3)
+  private brackets: THREE.LineSegments
+  private links: THREE.LineSegments
+  private bracketPositions = new Float32Array(MAX_TRACKS * 48 * 3)
+  private linkPositions = new Float32Array(MAX_TRACKS * 14 * 3)
   private selection: THREE.Mesh
+  private lights: THREE.Group
+  private halo: THREE.Group
+  private beacon: THREE.Sprite
 
   private ego = { x: 3, y: 10, yaw: Math.PI / 2, z: 1.9 }
   private ground = 0
@@ -105,7 +187,7 @@ export class CloudView {
   private tracksTime = 0
   private selected: number | null = null
 
-  private rig = { theta: 0, phi: 1.02, dist: 58, yaw: Math.PI / 2 }
+  private orbitState = { theta: 0, phi: 1.12, dist: 52, yaw: Math.PI / 2 }
   /** camera distances are authored for a 120 m sensor and scale with the range in use */
   private scale = 1
   private goal = { ...PRESET_GOALS.chase }
@@ -124,6 +206,8 @@ export class CloudView {
     this.labels = labels
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' })
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping
+    this.renderer.toneMappingExposure = 1.14
     this.renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
     this.camera.up.set(0, 0, 1)
 
@@ -138,16 +222,21 @@ export class CloudView {
     this.material = new THREE.ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
+      transparent: true,
+      depthWrite: true,
+      blending: THREE.NormalBlending,
       uniforms: {
         uRamp: { value: this.rampTex },
-        uFade: { value: new THREE.Color() },
+        uSensor: { value: new THREE.Vector3() },
         uNow: { value: 0 },
-        uPersist: { value: 0.3 },
-        uSize: { value: 2.2 },
+        uPersist: { value: 0.62 },
+        uSize: { value: 2.4 },
         uPx: { value: this.renderer.getPixelRatio() },
         uMaxRange: { value: 120 },
         uGround: { value: 0 },
         uHeightMax: { value: HEIGHT_MAX },
+        uYaw: { value: 0 },
+        uSweepAz: { value: 0 },
         uMode: { value: 0 },
       },
     })
@@ -155,31 +244,134 @@ export class CloudView {
     cloud.frustumCulled = false
     this.scene.add(cloud)
 
-    const line = () => new THREE.LineBasicMaterial({ transparent: true })
-    this.egoMark = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints(
-        [[2.7, 0], [1.5, 0.95], [-2.1, 0.95], [-2.1, -0.95], [1.5, -0.95]].map(([x, y]) => new THREE.Vector3(x, y, 0.04)),
-      ),
-      line(),
-    )
-    this.sweep = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0)]),
-      line(),
-    )
-    this.outline = new THREE.LineSegments(new THREE.BufferGeometry(), line())
+    const line = (opacity: number, color = PALETTE.ink) =>
+      new THREE.LineBasicMaterial({ transparent: true, opacity, color, blending: THREE.AdditiveBlending, depthWrite: false })
+    const lineNoBlend = (opacity: number, color = PALETTE.ink) =>
+      new THREE.LineBasicMaterial({ transparent: true, opacity, color, depthWrite: false })
+
+    this.outline = new THREE.LineSegments(new THREE.BufferGeometry(), lineNoBlend(0.24, PALETTE.outline))
     this.outline.frustumCulled = false
     const boxGeo = new THREE.BufferGeometry()
-    boxGeo.setAttribute('position', new THREE.BufferAttribute(this.boxPositions, 3).setUsage(THREE.DynamicDrawUsage))
+    boxGeo.setAttribute('position', new THREE.BufferAttribute(this.bracketPositions, 3).setUsage(THREE.DynamicDrawUsage))
     boxGeo.setDrawRange(0, 0)
-    this.boxes = new THREE.LineSegments(boxGeo, line())
-    this.boxes.frustumCulled = false
+    this.brackets = new THREE.LineSegments(boxGeo, line(0.68, PALETTE.exhibit))
+    this.brackets.frustumCulled = false
+    const linkGeo = new THREE.BufferGeometry()
+    linkGeo.setAttribute('position', new THREE.BufferAttribute(this.linkPositions, 3).setUsage(THREE.DynamicDrawUsage))
+    linkGeo.setDrawRange(0, 0)
+    this.links = new THREE.LineSegments(linkGeo, line(0.3, PALETTE.exhibit))
+    this.links.frustumCulled = false
+
     this.selection = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.16, depthWrite: false }),
+      new THREE.MeshBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.08, depthWrite: false }),
     )
     this.selection.visible = false
+
+    // ── Sensor platform ────────────────────────────────────────────────────
+    // A roof pod with a spinning drum. Modelling it (rather than a flat marker)
+    // gives the cloud a physical origin the eye can measure the returns against.
+    const metal = new THREE.MeshStandardMaterial({ color: 0x3a444a, metalness: 0.72, roughness: 0.34 })
+    const shell = new THREE.MeshStandardMaterial({ color: 0x191f23, metalness: 0.42, roughness: 0.5 })
+    const glow = new THREE.MeshBasicMaterial({ color: PALETTE.exhibit })
+    const podZ = 1.98
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 0.09, 28), metal)
+    base.position.z = 1.62
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.26, 12), shell)
+    mast.position.z = 1.79
+    const drumBody = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.3, 32), shell)
+    drumBody.position.z = podZ
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.06, 32), metal)
+    cap.position.z = podZ + 0.18
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.272, 0.008, 6, 40), glow)
+    collar.position.z = podZ + 0.02
+    collar.rotation.x = Math.PI / 2
+    const slit = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.13), glow)
+    slit.position.set(0, 0.255, podZ)
+    this.aperture = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), glow)
+    this.aperture.position.set(0, 0.29, podZ + 0.02)
+    this.drum.add(slit, this.aperture)
+    this.rig.add(base, mast, drumBody, cap, collar, this.drum)
+    this.rig.position.z = 0
+
+    this.platform = buildVehicle()
+    this.rig.add(this.platform)
+
+    this.lights = new THREE.Group()
+    const hemi = new THREE.HemisphereLight(0xa8bcc6, 0x05070a, 1.4)
+    const key = new THREE.DirectionalLight(0xe6eef2, 1.9)
+    key.position.set(-24, -18, 46)
+    const rim = new THREE.DirectionalLight(0xf2c230, 0.55)
+    rim.position.set(30, 20, 12)
+    this.lights.add(hemi, key, rim)
+
+    // Beam fan: the vertical field of the spinning head, drawn as thin rays.
+    this.beamFan = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.15, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    this.beamFan.frustumCulled = false
+    this.beamGround = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(1, 0, 0)]),
+      new THREE.LineBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.36, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    this.beamGround.frustumCulled = false
+    this.beam.add(this.beamFan, this.beamGround)
+    this.beam.position.z = 1.98
+
+    // A survey ring at the sensor's ground position, and a soft beacon on the
+    // pod: two cues that give the origin a fixed place in the picture.
+    this.halo = new THREE.Group()
+    const haloPts: THREE.Vector3[] = []
+    for (let k = 0; k < 72; k++) {
+      const a = (k / 72) * Math.PI * 2
+      haloPts.push(new THREE.Vector3(Math.cos(a) * 3.2, Math.sin(a) * 3.2, 0))
+    }
+    const haloRing = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(haloPts),
+      new THREE.LineBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    const haloCross: number[] = []
+    for (const a of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+      const c = Math.cos(a), s = Math.sin(a)
+      haloCross.push(c * 2.7, s * 2.7, 0, c * 4.2, s * 4.2, 0)
+    }
+    const haloMarks = new THREE.LineSegments(
+      new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(haloCross), 3)),
+      new THREE.LineBasicMaterial({ color: PALETTE.ink, transparent: true, opacity: 0.35, blending: THREE.AdditiveBlending, depthWrite: false }),
+    )
+    haloRing.renderOrder = haloMarks.renderOrder = 3
+    this.halo.add(haloRing, haloMarks)
+
+    const glowCanvas = document.createElement('canvas')
+    glowCanvas.width = glowCanvas.height = 64
+    const g2 = glowCanvas.getContext('2d')!
+    const grad = g2.createRadialGradient(32, 32, 0, 32, 32, 32)
+    grad.addColorStop(0, 'rgba(255, 232, 168, 0.9)')
+    grad.addColorStop(0.3, 'rgba(242, 194, 48, 0.35)')
+    grad.addColorStop(1, 'rgba(242, 194, 48, 0)')
+    g2.fillStyle = grad
+    g2.fillRect(0, 0, 64, 64)
+    const glowTex = new THREE.CanvasTexture(glowCanvas)
+    this.beacon = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTex, color: 0xffffff, transparent: true, opacity: 0.55,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }))
+    this.beacon.position.z = 1.99
+    this.beacon.scale.setScalar(4.5)
+    this.rig.add(this.beacon)
+
     this.chart.add(this.contourGroup)
-    this.scene.add(this.chart, this.egoMark, this.sweep, this.outline, this.boxes, this.selection)
+    this.scene.add(this.chart, this.halo, this.rig, this.beam, this.outline, this.brackets, this.links, this.selection, this.lights)
+    this.rebuildFan()
+
+    this.composer = new EffectComposer(this.renderer)
+    this.composer.addPass(new RenderPass(this.scene, this.camera))
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.5, 0.85)
+    this.composer.addPass(this.bloom)
+    this.vignette = new ShaderPass(VIGNETTE)
+    this.composer.addPass(this.vignette)
+    this.composer.addPass(new OutputPass())
 
     this.applyPalette()
     this.rebuildChart()
@@ -193,6 +385,7 @@ export class CloudView {
   dispose(): void {
     cancelAnimationFrame(this.raf)
     this.observer.disconnect()
+    this.composer.dispose()
     this.renderer.dispose()
     this.geometry.dispose()
     this.material.dispose()
@@ -276,17 +469,15 @@ export class CloudView {
   private applyPalette(): void {
     const p = PALETTE
     this.renderer.setClearColor(p.ground)
-    ;(this.material.uniforms.uFade.value as THREE.Color).set(p.ground)
     const set = (o: THREE.Line | THREE.LineSegments, color: string, opacity: number) => {
       const m = o.material as THREE.LineBasicMaterial
       m.color.set(color)
       m.opacity = opacity
     }
-    set(this.egoMark, p.ink, 1)
-    set(this.sweep, p.ink, 0.3)
-    set(this.outline, p.outline, 0.3)
-    set(this.boxes, p.exhibit, 1)
-    ;(this.selection.material as THREE.MeshBasicMaterial).color.set(p.exhibit)
+    set(this.outline, p.outline, 0.24)
+    set(this.brackets, p.exhibit, 0.95)
+    set(this.links, p.exhibit, 0.42)
+    ;(this.selection.material as THREE.MeshBasicMaterial).color.set(p.ink)
     this.updateRamp()
   }
 
@@ -316,14 +507,24 @@ export class CloudView {
     this.maxRange = m
     this.material.uniforms.uMaxRange.value = m
     this.rebuildChart()
+    this.rebuildFan()
+  }
+
+  /** Vertical field of view, so the beam fan matches the modelled head. */
+  setBeam(fovUp: number, fovDown: number): void {
+    if (fovUp === this.fovUp && fovDown === this.fovDown) return
+    this.fovUp = fovUp
+    this.fovDown = fovDown
+    this.rebuildFan()
   }
 
   setLayers(l: Layers): void {
     this.layers = l
     this.chart.visible = l.rings
-    this.sweep.visible = l.sweep
+    this.beam.visible = l.sweep
     this.outline.visible = l.outline
-    this.boxes.visible = l.tracks
+    this.brackets.visible = l.tracks
+    this.links.visible = l.tracks
   }
 
   /** Building boxes from the simulator: cx, cy, cz, hx, hy, hz, yaw each. */
@@ -349,13 +550,11 @@ export class CloudView {
   private rebuildChart(): void {
     const p = PALETTE
     const CONTOUR_STEP = this.step
-    for (const g of [this.contourGroup]) {
-      for (const c of [...g.children]) {
-        const o = c as THREE.Mesh
-        o.geometry.dispose()
-        ;(o.material as THREE.Material).dispose()
-        g.remove(c)
-      }
+    for (const c of [...this.contourGroup.children]) {
+      const o = c as THREE.Mesh
+      o.geometry.dispose()
+      ;(o.material as THREE.Material).dispose()
+      this.contourGroup.remove(c)
     }
     const bands = Math.ceil(this.maxRange / CONTOUR_STEP)
     for (let i = 0; i < bands; i++) {
@@ -367,7 +566,7 @@ export class CloudView {
       }
       const ring = new THREE.LineLoop(
         new THREE.BufferGeometry().setFromPoints(pts),
-        new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: i === bands - 1 ? 1 : 0.7, depthTest: false }),
+        new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: i === bands - 1 ? 0.5 : 0.24, depthTest: false }),
       )
       ring.renderOrder = -9
       this.contourGroup.add(ring)
@@ -381,10 +580,38 @@ export class CloudView {
     }
     const tickLines = new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(ticks),
-      new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: 1, depthTest: false }),
+      new THREE.LineBasicMaterial({ color: p.scale, transparent: true, opacity: 0.75, depthTest: false }),
     )
     tickLines.renderOrder = -9
     this.contourGroup.add(tickLines)
+  }
+
+  private rebuildFan(): void {
+    const R = Math.min(this.maxRange * 0.28, 32)
+    const pos: number[] = []
+    const col: number[] = []
+    const tint = new THREE.Color(PALETTE.exhibit)
+    const N = 14
+    for (let k = 0; k < N; k++) {
+      const el = ((this.fovDown + ((this.fovUp - this.fovDown) * k) / (N - 1)) * Math.PI) / 180
+      pos.push(0, 0, 0, Math.cos(el) * R, 0, Math.sin(el) * R)
+      // Additive blending fades each ray out by carrying its colour to black.
+      col.push(tint.r, tint.g, tint.b, 0, 0, 0)
+    }
+    this.beamFan.geometry.dispose()
+    const fan = new THREE.BufferGeometry()
+    fan.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3))
+    fan.setAttribute('color', new THREE.Float32BufferAttribute(col, 3))
+    this.beamFan.geometry = fan
+
+    const mount = Math.max(0, this.ego.z - this.ground)
+    const len = Math.min(this.maxRange * 0.26, 30)
+    this.beamGround.geometry.dispose()
+    const ground = new THREE.BufferGeometry()
+    ground.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0, len, 0, 0], 3))
+    ground.setAttribute('color', new THREE.Float32BufferAttribute([tint.r, tint.g, tint.b, 0, 0, 0], 3))
+    this.beamGround.geometry = ground
+    this.beamGround.position.z = -mount + 0.05
   }
 
   // ── Camera ──────────────────────────────────────────────────────────────
@@ -433,8 +660,8 @@ export class CloudView {
     this.goal.theta += dTheta
     this.goal.phi = Math.min(1.5, Math.max(0.03, this.goal.phi + dPhi))
     // Direct manipulation: no easing lag while dragging.
-    this.rig.theta = this.goal.theta
-    this.rig.phi = this.goal.phi
+    this.orbitState.theta = this.goal.theta
+    this.orbitState.phi = this.goal.phi
   }
 
   private zoom(factor: number): void {
@@ -468,6 +695,9 @@ export class CloudView {
     this.renderer.setSize(w, h, false)
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
+    this.composer.setPixelRatio(this.renderer.getPixelRatio())
+    this.composer.setSize(w, h)
+    this.bloom.setSize(w, h)
   }
 
   // ── Frame ───────────────────────────────────────────────────────────────
@@ -482,42 +712,56 @@ export class CloudView {
     // Sensor time keeps running between packets so fades stay smooth.
     const simNow = this.now + (this.running ? Math.min(0.1, (wall - this.stampWall) / 1000) : 0)
     this.material.uniforms.uNow.value = simNow
+    this.material.uniforms.uSensor.value.set(this.ego.x, this.ego.y, this.ego.z)
+    this.material.uniforms.uYaw.value = this.ego.yaw
+    this.material.uniforms.uSweepAz.value = this.sweepAz
 
     const e = this.ego
-    this.target.x += (e.x - this.target.x) * k
-    this.target.y += (e.y - this.target.y) * k
+    const scale = this.scale
+    const fx = Math.cos(e.yaw), fy = Math.sin(e.yaw)
+    const ahead = this.goal.ahead * Math.max(0.25, scale)
+    this.target.x += (e.x + fx * ahead - this.target.x) * k
+    this.target.y += (e.y + fy * ahead - this.target.y) * k
     this.target.z = this.ground + 1
-    let dyaw = e.yaw - this.rig.yaw
+    let dyaw = e.yaw - this.orbitState.yaw
     dyaw = Math.atan2(Math.sin(dyaw), Math.cos(dyaw))
-    this.rig.yaw += dyaw * (this.reducedMotion ? 1 : 1 - Math.exp(-dt * 3))
-    this.rig.theta += (this.goal.theta - this.rig.theta) * k
-    this.rig.phi += (this.goal.phi - this.rig.phi) * k
-    this.rig.dist += (this.goal.dist - this.rig.dist) * k
+    this.orbitState.yaw += dyaw * (this.reducedMotion ? 1 : 1 - Math.exp(-dt * 3))
+    this.orbitState.theta += (this.goal.theta - this.orbitState.theta) * k
+    this.orbitState.phi += (this.goal.phi - this.orbitState.phi) * k
+    this.orbitState.dist += (this.goal.dist - this.orbitState.dist) * k
     this.scale += (Math.max(0.12, this.maxRange / 120) - this.scale) * k
-    const dist = this.rig.dist * this.scale
-    const a = (this.goal.headingUp ? this.rig.yaw + Math.PI : -Math.PI / 2) + this.rig.theta
-    const sp = Math.sin(this.rig.phi)
+    const dist = this.orbitState.dist * scale
+    const a = (this.goal.headingUp ? this.orbitState.yaw + Math.PI : -Math.PI / 2) + this.orbitState.theta
+    const sp = Math.sin(this.orbitState.phi)
     this.camera.position.set(
       this.target.x + dist * sp * Math.cos(a),
       this.target.y + dist * sp * Math.sin(a),
-      this.target.z + dist * Math.cos(this.rig.phi),
+      this.target.z + dist * Math.cos(this.orbitState.phi),
     )
     this.camera.lookAt(this.target)
 
-    this.chart.position.set(e.x, e.y, this.ground)
-    this.egoMark.position.set(e.x, e.y, this.ground)
-    this.egoMark.rotation.z = e.yaw
-    this.egoMark.scale.setScalar(Math.min(1, this.scale * 2.5))
-    this.sweep.position.set(e.x, e.y, e.z)
-    this.sweep.rotation.z = e.yaw + this.sweepAz
-    this.sweep.scale.setScalar(this.maxRange)
+    // Chart and survey grid follow the sensor; the grid snaps to its own 10 m
+    // module so it does not crawl through the returns while the vehicle moves.
+    this.chart.position.set(Math.round(e.x / 10) * 10, Math.round(e.y / 10) * 10, this.ground + 0.01)
+    const mount = Math.max(0.02, e.z - this.ground)
+    const platformOn = mount > 0.6
+    this.platform.visible = platformOn
+    // The pod is modelled at 1.98 m in its own frame; lift or drop the rig so
+    // the drum's optical centre sits at the frame's mount height.
+    this.rig.position.set(e.x, e.y, this.ground + mount - 1.98)
+    this.halo.position.set(e.x, e.y, this.ground + 0.04)
+    this.rig.rotation.z = e.yaw
+    this.drum.rotation.z = this.sweepAz
+    this.beam.position.set(e.x, e.y, this.ground + mount)
+    this.beam.rotation.z = e.yaw + this.sweepAz
+    this.beamGround.position.z = -mount + 0.05
 
     this.used = 0
     if (this.layers.rings) this.drawRangeMarks(a)
     this.drawTracks(simNow)
     for (let i = this.used; i < this.pool.length; i++) this.pool[i].hidden = true
 
-    this.renderer.render(this.scene, this.camera)
+    this.composer.render()
   }
 
   private labelAt(x: number, y: number, z: number, text: string, cls: string): void {
@@ -553,20 +797,32 @@ export class CloudView {
   private drawTracks(simNow: number): void {
     const lead = Math.max(0, Math.min(0.25, simNow - this.tracksTime))
     const pts: number[] = []
+    const links: number[] = []
     const live = new Set<number>()
     let sel: Track | null = null
     if (this.layers.tracks) {
       for (const t of this.tracks.slice(0, MAX_TRACKS)) {
         const x = t.x + t.vx * lead, y = t.y + t.vy * lead
-        pushBoxEdges(pts, x, y, t.z, t.length, t.width, t.height, t.yaw)
         const speed = Math.hypot(t.vx, t.vy)
-        if (speed > 0.8) {
-          // One second of travel, drawn like a course vector.
-          pts.push(x, y, t.z, x + t.vx, y + t.vy, t.z)
-        } else {
-          pts.push(x, y, t.z, x, y, t.z)
-        }
         const selected = t.id === this.selected
+        // A tracking volume is a claim on a moving object. Static kerbside cars
+        // keep their tag and tether, but no crate drawn round them.
+        if (selected || (speed > 0.8 && Math.hypot(x - this.ego.x, y - this.ego.y) < 40)) {
+          pushBrackets(pts, x, y, t.z, t.length, t.width, t.height, t.yaw)
+        }
+        // A cross on the road below and a tether to the box's floor.
+        const bottom = t.z - t.height / 2
+        cross(links, x, y, this.ground + 0.04, 0.9)
+        links.push(x, y, bottom, x, y, this.ground + 0.04)
+        if (speed > 0.8) {
+          // One and a half seconds of travel, drawn as a course vector with a head.
+          const ex = x + t.vx * 1.5, ey = y + t.vy * 1.5
+          links.push(x, y, t.z, ex, ey, t.z)
+          const h = Math.min(1.2, speed * 0.35), ang = Math.atan2(t.vy, t.vx)
+          links.push(ex, ey, t.z, ex - Math.cos(ang - 0.45) * h, ey - Math.sin(ang - 0.45) * h, t.z)
+          links.push(ex, ey, t.z, ex - Math.cos(ang + 0.45) * h, ey - Math.sin(ang + 0.45) * h, t.z)
+        }
+        // A faint volume gives the points inside weight without hiding them.
         if (selected) sel = { ...t, x, y }
         live.add(t.id)
         this.placeMarker(t.id, x, y, t.z + t.height / 2 + 0.3, selected)
@@ -578,10 +834,14 @@ export class CloudView {
         this.markers.delete(id)
       }
     }
-    this.boxPositions.set(pts)
-    const attr = this.boxes.geometry.getAttribute('position') as THREE.BufferAttribute
+    this.bracketPositions.set(pts)
+    const attr = this.brackets.geometry.getAttribute('position') as THREE.BufferAttribute
     attr.needsUpdate = true
-    this.boxes.geometry.setDrawRange(0, pts.length / 3)
+    this.brackets.geometry.setDrawRange(0, pts.length / 3)
+    this.linkPositions.set(links)
+    const lattr = this.links.geometry.getAttribute('position') as THREE.BufferAttribute
+    lattr.needsUpdate = true
+    this.links.geometry.setDrawRange(0, links.length / 3)
     this.selection.visible = sel !== null
     if (sel) {
       this.selection.position.set(sel.x, sel.y, sel.z)
@@ -620,6 +880,119 @@ export function trackName(id: number): string {
   return `T-${String(id).padStart(2, '0')}`
 }
 
+/** A low-poly vehicle under the pod, so the sensor is mounted on something real. */
+function buildVehicle(): THREE.Group {
+  const car = new THREE.Group()
+  const paint = new THREE.MeshStandardMaterial({
+    color: 0x424b40,
+    metalness: 0.48,
+    roughness: 0.44,
+    emissive: 0x0e120e,
+    emissiveIntensity: 0.7,
+  })
+  const trim = new THREE.MeshStandardMaterial({ color: 0x171d1b, metalness: 0.32, roughness: 0.72 })
+  const glass = new THREE.MeshStandardMaterial({ color: 0x0d181b, metalness: 0.82, roughness: 0.18 })
+  const rubber = new THREE.MeshStandardMaterial({ color: 0x0a0c0c, metalness: 0.1, roughness: 0.95 })
+  const hub = new THREE.MeshStandardMaterial({ color: 0x6f7774, metalness: 0.8, roughness: 0.35 })
+  const tail = new THREE.MeshBasicMaterial({ color: 0xb03428 })
+  const head = new THREE.MeshBasicMaterial({ color: 0xe4d3a8 })
+  const amber = new THREE.MeshBasicMaterial({ color: 0xf2a51f })
+
+  const body = new THREE.Mesh(new RoundedBoxGeometry(4.3, 1.78, 0.66, 4, 0.14), paint)
+  body.position.z = 0.62
+  car.add(body)
+
+  const skirt = new THREE.Mesh(new RoundedBoxGeometry(4.36, 1.82, 0.26, 3, 0.08), trim)
+  skirt.position.z = 0.34
+  car.add(skirt)
+
+  const cabin = new THREE.Mesh(new RoundedBoxGeometry(2.42, 1.56, 0.6, 4, 0.18), glass)
+  cabin.position.set(-0.28, 0, 1.16)
+  car.add(cabin)
+
+  const roof = new THREE.Mesh(new RoundedBoxGeometry(2.05, 1.44, 0.1, 3, 0.05), paint)
+  roof.position.set(-0.28, 0, 1.47)
+  car.add(roof)
+
+  for (const x of [1.36, -1.42]) {
+    for (const y of [-0.86, 0.86]) {
+      const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.26, 18), rubber)
+      wheel.rotation.x = Math.PI / 2
+      wheel.position.set(x, y, 0.34)
+      car.add(wheel)
+      // A light hub catches the key light, so the wheels read at chase distance.
+      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.28, 12), hub)
+      cap.rotation.x = Math.PI / 2
+      cap.position.set(x, y, 0.34)
+      car.add(cap)
+    }
+  }
+
+  const bumperF = new THREE.Mesh(new RoundedBoxGeometry(0.34, 1.8, 0.32, 2, 0.07), trim)
+  bumperF.position.set(2.14, 0, 0.55)
+  car.add(bumperF)
+  const bumperR = bumperF.clone()
+  bumperR.position.x = -2.14
+  car.add(bumperR)
+
+  // A roof rack carries the pod; the rails also catch the beam at close range.
+  for (const y of [-0.58, 0.58]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.05, 0.05), trim)
+    rail.position.set(-0.2, y, 1.55)
+    car.add(rail)
+  }
+
+  // Amber beacons at the rack corners and a low bar on the tailgate: survey
+  // vehicles are lit like plant, not like passenger cars.
+  for (const x of [0.84, -1.24]) {
+    for (const y of [-0.62, 0.62]) {
+      const beacon = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.09, 0.06), amber)
+      beacon.position.set(x, y, 1.6)
+      car.add(beacon)
+    }
+  }
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.96, 0.045), amber)
+  bar.position.set(-2.17, 0, 1.02)
+  car.add(bar)
+
+  // Reflective side strips: two bright bars that give the flank its length.
+  for (const y of [-0.902, 0.902]) {
+    const strip = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.02, 0.075), head)
+    strip.position.set(0.1, y, 0.55)
+    car.add(strip)
+  }
+
+  for (const y of [-0.62, 0.62]) {
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.34, 0.12), tail)
+    lamp.position.set(-2.19, y, 0.74)
+    car.add(lamp)
+  }
+  for (const y of [-0.66, 0.66]) {
+    const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.24, 0.1), head)
+    lamp.position.set(2.19, y, 0.74)
+    car.add(lamp)
+  }
+
+  // A radio whip at the rear corner breaks the boxy silhouette.
+  const whip = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.014, 1.35, 6), trim)
+  whip.position.set(-2.0, 0.62, 1.28)
+  whip.rotation.x = 0.06
+  car.add(whip)
+
+  // The pod's mounting plate, between the roof and the drum.
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.42, 0.05, 24), trim)
+  plate.position.z = 1.6
+  car.add(plate)
+
+  car.position.z = 0.08
+  return car
+}
+
+function cross(out: number[], x: number, y: number, z: number, r: number): void {
+  out.push(x - r, y, z, x + r, y, z)
+  out.push(x, y - r, z, x, y + r, z)
+}
+
 function pushBoxEdges(
   out: number[], cx: number, cy: number, cz: number,
   l: number, w: number, h: number, yaw: number,
@@ -632,4 +1005,25 @@ function pushBoxEdges(
   }
   const edges = [0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7]
   for (const i of edges) out.push(...corner(i))
+}
+
+/** Eight corner brackets: a tracking volume that reads as a reticle, not a crate. */
+function pushBrackets(
+  out: number[], cx: number, cy: number, cz: number,
+  l: number, w: number, h: number, yaw: number,
+): void {
+  const c = Math.cos(yaw), s = Math.sin(yaw)
+  const hx = l / 2, hy = w / 2, hz = h / 2
+  const bx = Math.min(hx * 0.55, 0.55)
+  const by = Math.min(hy * 0.55, 0.55)
+  const bz = Math.min(hz * 0.55, 0.55)
+  for (let i = 0; i < 8; i++) {
+    const u = i & 1 ? hx : -hx, v = i & 2 ? hy : -hy, z = cz + (i & 4 ? hz : -hz)
+    const px = cx + u * c - v * s, py = cy + u * s + v * c
+    const sx = (i & 1 ? -bx : bx) * c, sy = (i & 1 ? -bx : bx) * s
+    out.push(px, py, z, px + sx, py + sy, z)
+    const uy = i & 2 ? -by : by
+    out.push(px, py, z, px - uy * s, py + uy * c, z)
+    out.push(px, py, z, px, py, z + (i & 4 ? -bz : bz))
+  }
 }
