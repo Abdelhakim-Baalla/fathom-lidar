@@ -64,7 +64,7 @@ void main() {
   float rank = 1.0;
   if (uMode != 4) {
     if (aLabel < 0.5) rank = 0.82;
-    else if (aLabel > 0.5 && aLabel < 1.5) rank = 1.12;
+    else if (aLabel > 0.5 && aLabel < 1.5) rank = 1.05;
     else if (aLabel > 1.5 && aLabel < 2.5) rank = 0.9;
     else if (aLabel > 7.5) rank = 0.4;
   }
@@ -112,7 +112,7 @@ const VIGNETTE = {
 export type CameraPreset = 'chase' | 'plan' | 'side'
 
 const PRESET_GOALS: Record<CameraPreset, { theta: number; phi: number; dist: number; headingUp: boolean; ahead: number }> = {
-  chase: { theta: 0.45, phi: 0.92, dist: 45, headingUp: true, ahead: 13 },
+  chase: { theta: 0.48, phi: 1.04, dist: 41, headingUp: true, ahead: 12 },
   plan: { theta: 0, phi: 0.06, dist: 138, headingUp: false, ahead: 0 },
   side: { theta: 1.32, phi: 1.14, dist: 54, headingUp: true, ahead: 6 },
 }
@@ -275,23 +275,32 @@ export class CloudView {
     const shell = new THREE.MeshStandardMaterial({ color: 0x191f23, metalness: 0.42, roughness: 0.5 })
     const glow = new THREE.MeshBasicMaterial({ color: PALETTE.exhibit })
     const podZ = 1.98
-    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 0.09, 28), metal)
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.47, 0.1, 28), metal)
     base.position.z = 1.62
-    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.1, 0.26, 12), shell)
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.11, 0.26, 12), shell)
     mast.position.z = 1.79
-    const drumBody = new THREE.Mesh(new THREE.CylinderGeometry(0.27, 0.27, 0.3, 32), shell)
+    const drumBody = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.34, 32), shell)
     drumBody.position.z = podZ
-    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.06, 32), metal)
-    cap.position.z = podZ + 0.18
-    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.272, 0.008, 6, 40), glow)
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.315, 0.07, 32), metal)
+    cap.position.z = podZ + 0.2
+    const collar = new THREE.Mesh(new THREE.TorusGeometry(0.322, 0.008, 6, 40), glow)
     collar.position.z = podZ + 0.02
     collar.rotation.x = Math.PI / 2
-    const slit = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.05, 0.13), glow)
-    slit.position.set(0, 0.255, podZ)
-    this.aperture = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), glow)
-    this.aperture.position.set(0, 0.29, podZ + 0.02)
+    const slit = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.15), glow)
+    slit.position.set(0, 0.3, podZ)
+    this.aperture = new THREE.Mesh(new THREE.SphereGeometry(0.038, 8, 6), glow)
+    this.aperture.position.set(0, 0.34, podZ + 0.02)
     this.drum.add(slit, this.aperture)
-    this.rig.add(base, mast, drumBody, cap, collar, this.drum)
+    // Cap bolts: a machined head rather than a smooth toy cylinder.
+    const bolts = new THREE.Group()
+    bolts.position.z = podZ + 0.24
+    for (let k = 0; k < 6; k++) {
+      const a = (k / 6) * Math.PI * 2
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.025, 6), metal)
+      bolt.position.set(Math.cos(a) * 0.225, Math.sin(a) * 0.225, 0)
+      bolts.add(bolt)
+    }
+    this.rig.add(base, mast, drumBody, cap, collar, this.drum, bolts)
     this.rig.position.z = 0
 
     this.platform = buildVehicle()
@@ -367,7 +376,7 @@ export class CloudView {
 
     this.composer = new EffectComposer(this.renderer)
     this.composer.addPass(new RenderPass(this.scene, this.camera))
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.42, 0.5, 0.85)
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.34, 0.5, 0.9)
     this.composer.addPass(this.bloom)
     this.vignette = new ShaderPass(VIGNETTE)
     this.composer.addPass(this.vignette)
@@ -792,6 +801,16 @@ export class CloudView {
         `${r} m`, 'rangemark',
       )
     }
+    // Cardinal points on the outer ring: the survey is north-up, so the scan
+    // answers a bearing without a separate compass.
+    const r = this.maxRange * 0.94
+    for (const [deg, text] of [[90, 'N'], [0, 'E'], [-90, 'S'], [180, 'W']] as const) {
+      const a = (deg * Math.PI) / 180
+      this.labelAt(
+        this.ego.x + Math.cos(a) * r, this.ego.y + Math.sin(a) * r, this.ground,
+        text, 'bearing',
+      )
+    }
   }
 
   private drawTracks(simNow: number): void {
@@ -884,14 +903,14 @@ export function trackName(id: number): string {
 function buildVehicle(): THREE.Group {
   const car = new THREE.Group()
   const paint = new THREE.MeshStandardMaterial({
-    color: 0x424b40,
-    metalness: 0.48,
-    roughness: 0.44,
-    emissive: 0x0e120e,
-    emissiveIntensity: 0.7,
+    color: 0x3c4638,
+    metalness: 0.22,
+    roughness: 0.62,
+    emissive: 0x0b0f0a,
+    emissiveIntensity: 0.5,
   })
-  const trim = new THREE.MeshStandardMaterial({ color: 0x171d1b, metalness: 0.32, roughness: 0.72 })
-  const glass = new THREE.MeshStandardMaterial({ color: 0x0d181b, metalness: 0.82, roughness: 0.18 })
+  const trim = new THREE.MeshStandardMaterial({ color: 0x151a18, metalness: 0.3, roughness: 0.8 })
+  const glass = new THREE.MeshStandardMaterial({ color: 0x0a1417, metalness: 0.8, roughness: 0.22 })
   const rubber = new THREE.MeshStandardMaterial({ color: 0x0a0c0c, metalness: 0.1, roughness: 0.95 })
   const hub = new THREE.MeshStandardMaterial({ color: 0x6f7774, metalness: 0.8, roughness: 0.35 })
   const tail = new THREE.MeshBasicMaterial({ color: 0xb03428 })
@@ -978,9 +997,65 @@ function buildVehicle(): THREE.Group {
   whip.position.set(-2.0, 0.62, 1.28)
   whip.rotation.x = 0.06
   car.add(whip)
+  const whip2 = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.011, 0.95, 6), trim)
+  whip2.position.set(-1.2, -0.66, 1.5)
+  whip2.rotation.x = -0.05
+  car.add(whip2)
+
+  // Brush bar and side steps give the vehicle a plant-vehicle stance, and a
+  // spare wheel on the tailgate kills the smooth box of the body.
+  for (const y of [-0.56, 0.56]) {
+    const upright = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.78, 10), trim)
+    upright.position.set(2.3, y, 0.7)
+    car.add(upright)
+  }
+  for (const z of [0.44, 0.92]) {
+    const crossbar = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.62, 10), trim)
+    crossbar.rotation.x = Math.PI / 2
+    crossbar.position.set(2.3, 0, z)
+    car.add(crossbar)
+  }
+  for (const y of [-0.98, 0.98]) {
+    const step = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.11, 0.08), trim)
+    step.position.set(-0.1, y, 0.3)
+    car.add(step)
+  }
+  const spare = new THREE.Mesh(new THREE.CylinderGeometry(0.37, 0.37, 0.24, 20), rubber)
+  spare.rotation.x = Math.PI / 2
+  spare.position.set(-2.25, 0, 0.78)
+  car.add(spare)
+  const spareHub = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.26, 12), hub)
+  spareHub.rotation.x = Math.PI / 2
+  spareHub.position.set(-2.25, 0, 0.78)
+  car.add(spareHub)
+
+  // Roof equipment: a hard case aft of the pod and a compact radar head ahead.
+  const caseBox = new THREE.Mesh(new RoundedBoxGeometry(1.02, 1.2, 0.34, 3, 0.06), trim)
+  caseBox.position.set(-1.42, 0, 1.72)
+  car.add(caseBox)
+  for (const x of [-1.78, -1.06]) {
+    const latch = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.16, 0.03), hub)
+    latch.position.set(x, 0.5, 1.72)
+    car.add(latch)
+  }
+  const radar = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.34, 0.13), trim)
+  radar.position.set(1.12, 0, 1.66)
+  car.add(radar)
+  const radarEye = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 0.05, 12), tail)
+  radarEye.rotation.z = Math.PI / 2
+  radarEye.position.set(1.24, 0, 1.66)
+  car.add(radarEye)
+
+  // Snorkel up the right A-pillar: a silhouette detail that reads at distance.
+  const snorkel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 0.95, 10), trim)
+  snorkel.position.set(0.96, 0.86, 1.02)
+  car.add(snorkel)
+  const snorkelHead = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.16, 10), trim)
+  snorkelHead.position.set(0.96, 0.86, 1.55)
+  car.add(snorkelHead)
 
   // The pod's mounting plate, between the roof and the drum.
-  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.42, 0.05, 24), trim)
+  const plate = new THREE.Mesh(new THREE.CylinderGeometry(0.44, 0.48, 0.05, 24), trim)
   plate.position.z = 1.6
   car.add(plate)
 

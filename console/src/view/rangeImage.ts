@@ -195,7 +195,10 @@ export class RangeImage {
         const nearest = Math.min(ra > 0 ? ra : Infinity, rb > 0 ? rb : Infinity, rc > 0 ? rc : Infinity, re > 0 ? re : Infinity)
         const o = (row + x) * 4
         if (!isFinite(nearest)) {
-          d[o] = BACKGROUND[0]; d[o + 1] = BACKGROUND[1]; d[o + 2] = BACKGROUND[2]; d[o + 3] = 255
+          // Above the horizon the sky sits a shade cooler than the ground
+          // clutter, so the image has a direction even where nothing returns.
+          const lift = (1 - y / Math.max(1, imgH - 1)) * 5
+          d[o] = BACKGROUND[0]; d[o + 1] = BACKGROUND[1] + lift * 0.45; d[o + 2] = BACKGROUND[2] + lift; d[o + 3] = 255
           continue
         }
         const tol = tolBase + nearest * 0.16
@@ -211,22 +214,31 @@ export class RangeImage {
 
         // Range sets the stock colour; reflectivity gates brightness, so asphalt
         // stays dark and glass reads cold while paint and reflectors burn warm.
+        // The extra weight on the dark end gives the image a true black and a
+        // brighter highlight instead of a uniformly pale sheet.
         const rr = Math.min(1, v / max)
         const si = Math.min(255, Math.round(Math.pow(rr, 0.78) * 255)) * 3
-        const depth = 1 - 0.34 * Math.pow(rr, 1.4)
-        const k = 0.16 + 1.02 * Math.pow(i, 0.62)
+        const depth = 1 - 0.3 * Math.pow(rr, 1.45)
+        const k = 0.14 + 1.2 * Math.pow(i, 0.55)
         let r = this.ramp[si] * k * depth
         let g = this.ramp[si + 1] * k * depth
         let bl = this.ramp[si + 2] * k * depth
-        if (i > 0.68) {
-          const w = Math.min(0.55, (i - 0.68) * 1.7)
-          r += 86 * w; g += 64 * w; bl += 26 * w
+        if (i > 0.62) {
+          const w = Math.min(0.62, (i - 0.62) * 1.8)
+          r += 92 * w; g += 68 * w; bl += 26 * w
         }
         // Fine dither: the instrument should read as a sensor, not a gradient.
-        const grain = ((x * 928371 + y * 1237) & 7) - 3.5
-        d[o] = Math.max(0, Math.min(255, r + grain * 1.05))
-        d[o + 1] = Math.max(0, Math.min(255, g + grain * 1.05))
-        d[o + 2] = Math.max(0, Math.min(255, bl + grain * 1.05))
+        const grain = ((x * 928371 + y * 1237) & 15) - 7.5
+        // A trickle of missing returns, denser where the signal is weak. Real
+        // range images are perforated, not painted.
+        const speck = ((x * 374761 + y * 668265 + (x >> 3) * 127) & 1023) / 1023
+        if (speck < 0.004 + (1 - i) * 0.01) {
+          d[o] = BACKGROUND[0]; d[o + 1] = BACKGROUND[1]; d[o + 2] = BACKGROUND[2]; d[o + 3] = 255
+          continue
+        }
+        d[o] = Math.max(0, Math.min(255, r + grain * 1.25))
+        d[o + 1] = Math.max(0, Math.min(255, g + grain * 1.25))
+        d[o + 2] = Math.max(0, Math.min(255, bl + grain * 1.25))
         d[o + 3] = 255
       }
     }
@@ -295,7 +307,7 @@ export class RangeImage {
       if (y > 0 && y < imgH) this.ctx.fillRect(0, y, W, 1)
     }
 
-    // Sweep cursor with a short wake: the sensor is turning clockwise, which
+    // The sweep cursor with a short wake: the sensor is turning clockwise, which
     // moves the cursor from right to left in this bearing map.
     const sx = (0.5 - this.sweepAz / TWO_PI) * W
     const trail = this.ctx.createLinearGradient(sx, 0, sx + 34, 0)
@@ -326,17 +338,17 @@ export class RangeImage {
     this.ctx.fillText(`AZ ${az}`, W - 10, 7)
     this.ctx.textAlign = 'left'
 
-    // Bearing ruler.
+    // Bearing ruler: a fine 5° comb with labelled 30° marks.
     const tickTop = imgH + 1
     this.ctx.fillStyle = 'rgba(235,229,214,0.12)'
     this.ctx.fillRect(0, imgH, W, 1)
     this.ctx.font = `700 ${Math.max(8, Math.round(footer * 0.5))}px "Sofia Sans Extra Condensed", system-ui, sans-serif`
-    for (let b = 0; b < 360; b += 10) {
+    for (let b = 0; b < 360; b += 5) {
       const rel = b <= 180 ? b : b - 360
       const x = (0.5 + rel / 360) * W
       const major = b % 30 === 0
       this.ctx.fillStyle = major ? DIM : FAINT
-      this.ctx.fillRect(Math.round(x), tickTop, 1, major ? footer * 0.26 : footer * 0.14)
+      this.ctx.fillRect(Math.round(x), tickTop, 1, major ? footer * 0.26 : b % 10 === 0 ? footer * 0.18 : footer * 0.1)
       if (major) {
         const label = String(b).padStart(3, '0')
         this.ctx.fillStyle = b === 0 ? INK : DIM
@@ -368,6 +380,36 @@ export class RangeImage {
       const elev = (Math.atan2(t.z - this.ego.z, dist) * 180) / Math.PI
       const y = Math.min(imgH - 8, Math.max(8, elevY(elev)))
       if (x < 8 || x > W - 8) continue
+
+      // Course vector: a two-second lead line in bearing/elevation, so a moving
+      // contact reads as a track rather than a dot on the range image.
+      const speed = Math.hypot(t.vx, t.vy)
+      if (speed > 0.6) {
+        const hx = t.x + t.vx * 2.2, hy = t.y + t.vy * 2.2
+        let erel = Math.atan2(hy - this.ego.y, hx - this.ego.x) - this.ego.yaw
+        erel = Math.atan2(Math.sin(erel), Math.cos(erel))
+        const ex = (0.5 - erel / TWO_PI) * W
+        const edist = Math.hypot(hx - this.ego.x, hy - this.ego.y)
+        const ey = Math.min(imgH - 3, Math.max(3, elevY((Math.atan2(t.z - this.ego.z, edist) * 180) / Math.PI)))
+        if (Math.abs(ex - x) < W / 2 && Math.abs(ex - x) > 3) {
+          this.ctx.strokeStyle = 'rgba(242,194,48,0.5)'
+          this.ctx.lineWidth = 1
+          this.ctx.setLineDash([3, 3])
+          this.ctx.beginPath()
+          this.ctx.moveTo(x, y)
+          this.ctx.lineTo(ex, ey)
+          this.ctx.stroke()
+          this.ctx.setLineDash([])
+          const a = Math.atan2(ey - y, ex - x)
+          this.ctx.beginPath()
+          this.ctx.moveTo(ex, ey)
+          this.ctx.lineTo(ex - Math.cos(a - 0.5) * 4, ey - Math.sin(a - 0.5) * 4)
+          this.ctx.moveTo(ex, ey)
+          this.ctx.lineTo(ex - Math.cos(a + 0.5) * 4, ey - Math.sin(a + 0.5) * 4)
+          this.ctx.stroke()
+        }
+      }
+
       const s = 4
       this.ctx.strokeStyle = EXHIBIT
       this.ctx.lineWidth = 1
