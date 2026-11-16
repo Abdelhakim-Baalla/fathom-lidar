@@ -131,6 +131,7 @@ export class CloudView {
   exhibitOf: (trackId: number) => number | undefined = () => undefined
   pointsHeld = 0
 
+  private inputEvents = new AbortController()
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
   private camera = new THREE.PerspectiveCamera(42, 1, 0.1, 900)
@@ -204,7 +205,11 @@ export class CloudView {
   constructor(canvas: HTMLCanvasElement, labels: HTMLElement) {
     this.host = canvas.parentElement!
     this.labels = labels
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' })
+    // Request once, before Three.js initialization: a denied context is a local
+    // view failure, not an exception that should take down the instruments.
+    const context = canvas.getContext('webgl2', { antialias: true, alpha: false })
+    if (!context) throw new Error('WebGL 2 is unavailable')
+    this.renderer = new THREE.WebGLRenderer({ canvas, context })
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping
     this.renderer.toneMappingExposure = 1.14
@@ -310,7 +315,7 @@ export class CloudView {
     const hemi = new THREE.HemisphereLight(0xa8bcc6, 0x05070a, 1.4)
     const key = new THREE.DirectionalLight(0xe6eef2, 1.9)
     key.position.set(-24, -18, 46)
-    const rim = new THREE.DirectionalLight(0xf2c230, 0.55)
+    const rim = new THREE.DirectionalLight(0xf48142, 0.55)
     rim.position.set(30, 20, 12)
     this.lights.add(hemi, key, rim)
 
@@ -357,8 +362,8 @@ export class CloudView {
     const g2 = glowCanvas.getContext('2d')!
     const grad = g2.createRadialGradient(32, 32, 0, 32, 32, 32)
     grad.addColorStop(0, 'rgba(255, 232, 168, 0.9)')
-    grad.addColorStop(0.3, 'rgba(242, 194, 48, 0.35)')
-    grad.addColorStop(1, 'rgba(242, 194, 48, 0)')
+    grad.addColorStop(0.3, 'rgba(244, 129, 66, 0.35)')
+    grad.addColorStop(1, 'rgba(244, 129, 66, 0)')
     g2.fillStyle = grad
     g2.fillRect(0, 0, 64, 64)
     const glowTex = new THREE.CanvasTexture(glowCanvas)
@@ -394,10 +399,21 @@ export class CloudView {
   dispose(): void {
     cancelAnimationFrame(this.raf)
     this.observer.disconnect()
+    this.inputEvents.abort()
+    for (const pass of this.composer.passes) pass.dispose()
     this.composer.dispose()
     this.renderer.dispose()
-    this.geometry.dispose()
-    this.material.dispose()
+    const materials = new Set<THREE.Material>()
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh
+      mesh.geometry?.dispose()
+      if (mesh.material) {
+        for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) materials.add(material)
+      }
+    })
+    for (const material of materials) material.dispose()
+    this.rampTex.dispose()
+    this.beacon.material.map?.dispose()
     this.labels.replaceChildren()
     this.markers.clear()
   }
@@ -630,11 +646,12 @@ export class CloudView {
   }
 
   private bindPointer(canvas: HTMLCanvasElement): void {
+    const signal = this.inputEvents.signal
     let down: { x: number; y: number; moved: number } | null = null
     canvas.addEventListener('pointerdown', (e) => {
       down = { x: e.clientX, y: e.clientY, moved: 0 }
       canvas.setPointerCapture(e.pointerId)
-    })
+    }, { signal })
     canvas.addEventListener('pointermove', (e) => {
       if (!down) return
       const dx = e.clientX - down.x, dy = e.clientY - down.y
@@ -642,16 +659,16 @@ export class CloudView {
       down.y = e.clientY
       down.moved += Math.abs(dx) + Math.abs(dy)
       this.orbit(-dx * 0.006, -dy * 0.005)
-    })
+    }, { signal })
     canvas.addEventListener('pointerup', (e) => {
       if (down && down.moved < 5) this.pick(e.offsetX, e.offsetY)
       down = null
-    })
-    canvas.addEventListener('pointercancel', () => (down = null))
+    }, { signal })
+    canvas.addEventListener('pointercancel', () => (down = null), { signal })
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault()
       this.zoom(Math.exp(e.deltaY * 0.0012))
-    }, { passive: false })
+    }, { passive: false, signal })
     canvas.addEventListener('keydown', (e) => {
       const k = e.key
       if (k === 'ArrowLeft') this.orbit(-0.12, 0)
@@ -662,7 +679,7 @@ export class CloudView {
       else if (k === '-') this.zoom(1.18)
       else return
       e.preventDefault()
-    })
+    }, { signal })
   }
 
   private orbit(dTheta: number, dPhi: number): void {
@@ -713,6 +730,7 @@ export class CloudView {
 
   private frame = (): void => {
     this.raf = requestAnimationFrame(this.frame)
+    if (this.renderer.getContext().isContextLost()) return
     const wall = performance.now()
     const dt = Math.min(0.1, (wall - this.lastFrame) / 1000)
     this.lastFrame = wall
@@ -903,13 +921,13 @@ export function trackName(id: number): string {
 function buildVehicle(): THREE.Group {
   const car = new THREE.Group()
   const paint = new THREE.MeshStandardMaterial({
-    color: 0x3c4638,
+    color: 0x3d424a,
     metalness: 0.22,
     roughness: 0.62,
-    emissive: 0x0b0f0a,
+    emissive: 0x0b0d10,
     emissiveIntensity: 0.5,
   })
-  const trim = new THREE.MeshStandardMaterial({ color: 0x151a18, metalness: 0.3, roughness: 0.8 })
+  const trim = new THREE.MeshStandardMaterial({ color: 0x15171b, metalness: 0.3, roughness: 0.8 })
   const glass = new THREE.MeshStandardMaterial({ color: 0x0a1417, metalness: 0.8, roughness: 0.22 })
   const rubber = new THREE.MeshStandardMaterial({ color: 0x0a0c0c, metalness: 0.1, roughness: 0.95 })
   const hub = new THREE.MeshStandardMaterial({ color: 0x6f7774, metalness: 0.8, roughness: 0.35 })

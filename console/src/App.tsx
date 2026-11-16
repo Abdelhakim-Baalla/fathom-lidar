@@ -1,4 +1,9 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Acquisition, InstrumentIcon, SessionExport } from './FieldInstrument'
+import { liveTrack } from './observation'
+import { Intro } from './intro'
+import { AudioPanel } from './audio/AudioPanel'
+import { SerialCsi } from './wifi/serial'
 import { engine, type EngineState } from './engine'
 import { clock, type Exhibit, type ExhibitKind } from './exhibits'
 import type { Track } from './perception/track'
@@ -27,15 +32,6 @@ function useEngine() {
   return useSyncExternalStore((fn) => engine.subscribe(fn), () => engine.state)
 }
 
-function stored(key: string, fallback: boolean): boolean {
-  try {
-    const v = localStorage.getItem(key)
-    return v === null ? fallback : v === '1'
-  } catch {
-    return fallback
-  }
-}
-
 function store(key: string, value: string): void {
   try {
     localStorage.setItem(key, value)
@@ -59,7 +55,7 @@ const COLOR_MODES: Array<{ id: ColorMode; label: string; legend: [string, string
 const TRUTH_KEYS = [CLASS.ground, CLASS.building, CLASS.vegetation, CLASS.pole, CLASS.car, CLASS.truck, CLASS.pedestrian, CLASS.cyclist]
 
 const secure = location.protocol === 'https:'
-const DEFAULT_BRIDGE = secure ? `wss://${location.host}/bridge` : 'ws://127.0.0.1:8765'
+const DEFAULT_BRIDGE = import.meta.env.DEV && secure ? `wss://${location.host}/bridge` : secure ? 'wss://localhost:8765' : 'ws://127.0.0.1:8765'
 const CASE = (() => {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
@@ -92,6 +88,11 @@ export default function App() {
   const [fileError, setFileError] = useState('')
   const [xr, setXr] = useState<boolean | null>(null)
   const [spacing, setSpacing] = useState(10)
+  const [audioOpen, setAudioOpen] = useState(false)
+  const [introReplay, setIntroReplay] = useState(0)
+  const closeAudio = useCallback(() => setAudioOpen(false), [])
+  const [cloudStatus, setCloudStatus] = useState<'ready' | 'unavailable' | 'lost'>('ready')
+  const [cloudAttempt, setCloudAttempt] = useState(0)
   const [sealed, setSealed] = useState<number | null>(null)
 
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -101,26 +102,23 @@ export default function App() {
   const soundCanvas = useRef<HTMLCanvasElement>(null)
   const timelineCanvas = useRef<HTMLCanvasElement>(null)
   const overlay = useRef<HTMLDivElement>(null)
-  const views = useRef<{ cloud: CloudView; timeline: Timeline } | null>(null)
+  const views = useRef<{ cloud: CloudView | null; timeline: Timeline } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    const cloud = new CloudView(canvas.current!, labels.current!)
     const range = new RangeImage(rangeCanvas.current!)
     const wifi = new WifiView(wifiCanvas.current!)
     const spectro = new Spectrogram(soundCanvas.current!, engine.listener.analyser, () => engine.listener.sampleRate)
     const timeline = new Timeline(timelineCanvas.current!, engine.exhibitsNow)
-    views.current = { cloud, timeline }
-    engine.attach(cloud, range)
+    views.current = { cloud: null, timeline }
+    engine.attach(null, range)
     engine.attachInstruments(wifi, spectro, timeline)
-    cloud.onSelect = (trackId) => setSelected(trackId === null ? null : engine.exhibitOfTrack(trackId) ?? null)
     timeline.onSelect = (n) => setSelected((cur) => (cur === n ? null : n))
-    if (stored('fathom.sounds', false)) engine.setSounds(true)
+    // Audio starts only after an explicit gesture; browsers block autoplay.
     PhoneScan.supported().then(setXr)
     return () => {
       engine.detach()
       engine.detachInstruments()
-      cloud.dispose()
       range.dispose()
       wifi.dispose()
       spectro.dispose()
@@ -129,30 +127,62 @@ export default function App() {
     }
   }, [])
 
+  useEffect(() => {
+    const target = canvas.current!
+    let cloud: CloudView
+    try {
+      cloud = new CloudView(target, labels.current!)
+    } catch (error) {
+      console.warn('Fathom: 3D view unavailable; acquisition and 2D instruments remain active.', error)
+      // oxlint-disable-next-line react/set-state-in-effect -- Reflect the result of synchronizing with the browser's GPU.
+      setCloudStatus('unavailable')
+      return
+    }
+    views.current!.cloud = cloud
+    engine.attachCloud(cloud)
+    cloud.onSelect = (trackId) => setSelected(trackId === null ? null : engine.exhibitOfTrack(trackId) ?? null)
+    // oxlint-disable-next-line react/set-state-in-effect -- The external renderer has just attached successfully.
+    setCloudStatus('ready')
+    const lost = (event: Event) => {
+      event.preventDefault() // Allow the browser and Three.js to restore this context.
+      setCloudStatus('lost')
+    }
+    const restored = () => setCloudStatus('ready')
+    target.addEventListener('webglcontextlost', lost)
+    target.addEventListener('webglcontextrestored', restored)
+    return () => {
+      target.removeEventListener('webglcontextlost', lost)
+      target.removeEventListener('webglcontextrestored', restored)
+      engine.attachCloud(null)
+      if (views.current) views.current.cloud = null
+      cloud.dispose()
+    }
+  }, [cloudAttempt])
+
   useEffect(() => engine.configure(sensor, env), [sensor, env])
-  useEffect(() => views.current?.cloud.setColorMode(mode), [mode])
-  useEffect(() => views.current?.cloud.setPointSize(pointSize), [pointSize])
+  useEffect(() => views.current?.cloud?.setColorMode(mode), [mode, cloudAttempt])
+  useEffect(() => views.current?.cloud?.setPointSize(pointSize), [pointSize, cloudAttempt])
   useEffect(() => {
     // A scan of a place keeps every point; a moving sensor holds a few revolutions.
-    views.current?.cloud.setPersistence(s.accumulating ? 1e7 : held / sensor.rateHz + 0.02)
-  }, [held, sensor.rateHz, s.accumulating])
-  useEffect(() => views.current?.cloud.setLayers(layers), [layers])
-  useEffect(() => views.current?.cloud.setCamera(camera), [camera])
+    views.current?.cloud?.setPersistence(s.accumulating ? 1e7 : held / sensor.rateHz + 0.02)
+  }, [held, sensor.rateHz, s.accumulating, cloudAttempt])
+  useEffect(() => views.current?.cloud?.setLayers(layers), [layers, cloudAttempt])
+  useEffect(() => views.current?.cloud?.setCamera(camera), [camera, cloudAttempt])
   useEffect(() => { engine.listener.analyser.spacing = spacing / 100 }, [spacing])
 
   const byNumber = useMemo(() => new Map(s.exhibits.map((e) => [e.n, e])), [s.exhibits])
   const selectedExhibit = selected === null ? null : byNumber.get(selected) ?? null
-  const selectedTrack = selectedExhibit?.kind === 'object' ? s.tracks.find((t) => t.id === selectedExhibit.trackId) ?? null : null
+  const selectedTrack = liveTrack(selectedExhibit, s.tracks, s.sourceRun)
 
   useEffect(() => {
-    views.current?.cloud.setSelected(selectedTrack?.id ?? null)
+    views.current?.cloud?.setSelected(selectedTrack?.id ?? null)
     if (views.current) views.current.timeline.selected = selected
-  }, [selectedTrack?.id, selected])
+  }, [selectedTrack?.id, selected, cloudAttempt])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement
-      if (el.closest('input, select, textarea, button')) return
+      if (el.closest('input, select, textarea, button, dialog')) return
       if (e.key === ' ') {
         e.preventDefault()
         engine.setRunning(!engine.state.running)
@@ -203,10 +233,14 @@ export default function App() {
   const toggleSounds = () => {
     const on = !s.sounds
     engine.setSounds(on)
+    if (on) engine.cues.play('connect')
     store('fathom.sounds', on ? '1' : '0')
   }
 
   const sim = s.source === 'simulator'
+  const hasFrames = s.stats.receivedFrames > 0
+  const stale = s.running && s.stats.lastFrameAge > 2.5
+  const sourceLabel = sim || s.stats.simulated ? 'SIMULATION' : s.source === 'recording' ? 'REPLAY' : !hasFrames ? 'STANDBY' : stale ? 'STALE INPUT' : !s.running ? 'PAUSED' : 'MEASURED INPUT'
   const legend = COLOR_MODES.find((m) => m.id === mode)!
   const counts = useMemo(() => {
     const c = { all: s.exhibits.length, object: 0, wifi: 0, sound: 0, recording: 0 }
@@ -216,34 +250,38 @@ export default function App() {
 
   return (
     <div className="console">
+      <Intro replay={introReplay} />
       <header className="bar">
-        <span className="wordmark"><Mark />Fathom</span>
-        <span className="case">Case {CASE}</span>
+        <a className="wordmark" href="#" aria-label="Fathom Field Systems" onClick={(e) => { e.preventDefault(); setFeed('lidar') }}><img src={`${import.meta.env.BASE_URL}identity/fathom-lockup.svg`} alt="Fathom Field Systems" width="176" height="40" /></a>
+        <span className="case">Session <span className="num">{CASE}</span></span>
         <nav className="feeds" aria-label="Sensor feeds">
           <FeedChip id="lidar" feed={feed} setFeed={setFeed} name="LiDAR" sim={s.stats.simulated && s.source !== 'scan'}
-            live={s.running && (s.source !== 'bridge' || s.bridge === 'open')}
+            live={s.running && hasFrames && !stale}
             stat={s.source === 'scan' ? `${compact.format(s.scan?.points ?? 0)} pts kept` : `${compact.format(s.stats.pointsPerSecond)} pts/s`} />
           <FeedChip id="wifi" feed={feed} setFeed={setFeed} name="Wi-Fi" sim={s.wifi.mode === 'simulated'}
-            live={s.wifi.mode === 'simulated' || s.wifi.link === 'open'} alert={s.wifi.moving}
+            live={s.wifi.packetsPerSecond > 0} alert={s.wifi.moving}
             stat={s.wifi.mode === 'off' ? 'off' : s.wifi.moving ? 'motion' : 'quiet'} />
           <FeedChip id="acoustic" feed={feed} setFeed={setFeed} name="Acoustic" sim={false}
             live={s.mic.state === 'on'} stat={s.mic.state === 'on' ? `${counts.sound} events` : 'off'} />
         </nav>
         <button className={`iconbtn ${s.sounds ? 'is-on' : ''}`} aria-pressed={s.sounds} onClick={toggleSounds}
-          title="Interface sounds">
+          title="Toggle event audio">
           <SpeakerIcon on={s.sounds} />
           <span className="sr">Interface sounds</span>
         </button>
-        {s.stats.simulated && s.source !== 'scan' && <span className="sim-badge">Simulated</span>}
+        <button className="btn btn--small btn--quiet audio-settings" aria-expanded={audioOpen} onClick={() => setAudioOpen(!audioOpen)}>Audio</button>
+        <a className="about-link" href={`${import.meta.env.BASE_URL}about.html`}>About</a>
+        <span className={`source-state ${stale ? 'is-stale' : ''}`}>{sourceLabel}</span>
+        {audioOpen && <AudioPanel volume={s.volume} close={closeAudio} replay={() => { setAudioOpen(false); setIntroReplay(value => value + 1) }} />}
       </header>
 
       <aside className="rail" aria-label="Settings for the selected feed">
         {feed === 'lidar' && (
           <>
             <section>
-              <h2>Source</h2>
+              <h2>Input</h2>
               <label className="field">
-                <span>Frames from</span>
+                <span>Source</span>
                 <select value={s.source} onChange={(e) => {
                   const v = e.target.value
                   if (v === 'simulator') engine.useSimulator()
@@ -252,25 +290,25 @@ export default function App() {
                   else if (v === 'scan') engine.startScan(overlay.current!, relay ? bridgeUrl : null)
                 }}>
                   <option value="simulator">Simulated city drive</option>
-                  <option value="bridge">Sensor via bridge</option>
-                  <option value="recording">Sealed recording file</option>
+                  <option value="bridge">Connected device</option>
+                  <option value="recording">Recording file</option>
                   <option value="scan" disabled={!xr}>Phone room scan{xr === false ? ' (needs an ARCore phone)' : ''}</option>
                 </select>
               </label>
               {(s.source === 'bridge' || xr) && (
                 <form className="inline" onSubmit={(e) => { e.preventDefault(); engine.connectBridge(bridgeUrl) }}>
                   <label className="field">
-                    <span>Bridge address</span>
+                    <span>Device address</span>
                     <input value={bridgeUrl} onChange={(e) => setBridgeUrl(e.target.value)} spellCheck={false} />
                   </label>
-                  {s.source === 'bridge' && <button type="submit" className="btn">Reconnect</button>}
+                  {s.source === 'bridge' && <button type="submit" className="btn">{s.bridge === 'open' ? 'Reconnect' : 'Connect'}</button>}
                 </form>
               )}
               {s.source === 'bridge' && (
                 <p className={`note ${s.bridge === 'error' || s.bridge === 'closed' ? 'note--warn' : ''}`} role="status">
                   {s.bridge === 'error' || s.bridge === 'closed'
-                    ? <>{s.bridgeMessage}. Start it with <code>uv run fathom-bridge</code> in <code>bridge/</code>.</>
-                    : s.bridge === 'open' ? 'Receiving frames from the bridge.' : 'Connecting…'}
+                    ? <>{s.bridgeMessage}. Start it with <code>uv run fathom-bridge --source udp</code> in <code>bridge/</code>.</>
+                    : s.bridge === 'open' ? hasFrames ? 'Receiving frames' : 'Awaiting frames' : s.bridge === 'connecting' ? 'Connecting…' : 'Offline'}
                 </p>
               )}
               {xr && (
@@ -281,9 +319,6 @@ export default function App() {
                   </button>
                   <p className="note">Walk slowly and sweep the phone across walls, floor and furniture. Depth comes from ARCore and is estimated on most phones.</p>
                 </>
-              )}
-              {xr === false && (
-                <p className="note">Room scans run on an Android phone with ARCore depth. Start <code>bun run dev:phone</code> and open its network address in Chrome on the phone.</p>
               )}
               {s.scanMessage && <p className="note" role="status">{s.scanMessage}</p>}
               {s.source === 'recording' && s.replay && (
@@ -296,7 +331,7 @@ export default function App() {
             {sim ? (
               <>
                 <section>
-                  <h2>Sensor</h2>
+                  <h2>Scan parameters</h2>
                   <label className="field">
                     <span>Beam layout</span>
                     <select value={presetId} onChange={(e) => choosePreset(e.target.value)}>
@@ -323,16 +358,12 @@ export default function App() {
                     onChange={(v) => setEnv({ ...env, egoSpeed: v / 3.6 })} />
                 </section>
               </>
-            ) : s.source !== 'scan' && (
-              <section>
-                <h2>Sensor</h2>
-                <p className="note">
-                  {s.stats.seenChannels > 0
-                    ? <>Configured on the device. Seen so far: {s.stats.seenChannels} channels, returns out to {s.stats.seenRange} m.</>
-                    : 'Configured on the device. Its channel count and range appear here once frames arrive.'}
-                </p>
-              </section>
-            )}
+            ) : null}
+            <section>
+              <h2>Proximity</h2>
+              <Check label="Proximity alerts" checked={s.proximity.enabled} onChange={(v) => engine.configureProximity(v)} />
+              {s.proximity.enabled && <Slider label="Radius" min={2} max={30} step={1} value={s.proximity.radius} unit="m" onChange={(v) => engine.configureProximity(true, v)} />}
+            </section>
             <section>
               <h2>Display</h2>
               <label className="field">
@@ -368,24 +399,29 @@ export default function App() {
         {feed === 'wifi' && (
           <>
             <section>
-              <h2>Source</h2>
+              <h2>Input</h2>
               <fieldset className="seg" aria-label="Wi-Fi source">
-                {([['simulated', 'Simulated room'], ['esp32', 'ESP32'], ['off', 'Off']] as const).map(([id, label]) => (
+                {([['serial', 'USB ESP32'], ['esp32', 'Bridge'], ['simulated', 'Simulation'], ['off', 'Off']] as const).map(([id, label]) => (
                   <label key={id}><input type="radio" name="wifi" checked={s.wifi.mode === id}
                     onChange={() => engine.setWifiMode(id, csiUrl)} /><span>{label}</span></label>
                 ))}
               </fieldset>
+              <p className="note">Real sensing requires an ESP32 running esp-csi. A browser cannot extract channel measurements from an ordinary router alone.</p>
+              {s.wifi.mode === 'serial' && <>
+                <button className="btn btn--primary" disabled={!SerialCsi.supported()} onClick={() => engine.setWifiMode('serial')}>Choose USB device</button>
+                <p className="note" role="status">{s.wifi.message || (SerialCsi.supported() ? 'Choose the ESP32 serial port.' : 'USB access requires desktop Chrome or Edge over HTTPS or localhost.')}</p>
+              </>}
               {s.wifi.mode === 'simulated' && (
                 <>
                   <Slider label="People in the room" value={s.wifi.people} min={0} max={4} step={1} unit=""
                     onChange={(v) => engine.setWifiPeople(v)} />
-                  <p className="note">A transmitter and receiver 6.9 m apart on channel 6. Every packet is the sum of the direct path, four wall reflections and each person's scatter, per subcarrier.</p>
+
                 </>
               )}
               {s.wifi.mode === 'esp32' && (
                 <form className="inline" onSubmit={(e) => { e.preventDefault(); engine.setWifiMode('esp32', csiUrl) }}>
                   <label className="field">
-                    <span>Bridge address</span>
+                    <span>Device address</span>
                     <input value={csiUrl} onChange={(e) => setCsiUrl(e.target.value)} spellCheck={false} />
                   </label>
                   <button type="submit" className="btn">Connect</button>
@@ -402,10 +438,10 @@ export default function App() {
               <dl className="facts">
                 <div><dt>Motion index</dt><dd>{fmt1.format(s.wifi.index)} %</dd></div>
                 <div><dt>Score over quiet floor</dt><dd>× {fmt1.format(s.wifi.score)}</dd></div>
-                <div><dt>Received power</dt><dd>{s.wifi.mode === 'off' ? '—' : `${Math.round(s.wifi.rssi)} dBm`}</dd></div>
+                <div><dt>Received power</dt><dd>{s.wifi.packetsPerSecond === 0 ? '—' : `${Math.round(s.wifi.rssi)} dBm`}</dd></div>
                 <div><dt>Packets</dt><dd>{Math.round(s.wifi.packetsPerSecond)} /s</dd></div>
               </dl>
-              <p className="note">One link senses that something moved near it. It does not locate or count people; the plan shows the simulation's ground truth for comparison.</p>
+              <p className="note">Motion sensing only. No position or room image.</p>
             </section>
           </>
         )}
@@ -433,27 +469,44 @@ export default function App() {
                 <div><dt>Opens at</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.floorDb + 12)} dBFS` : 'floor + 12 dB'}</dd></div>
                 <div><dt>Events logged</dt><dd>{counts.sound}</dd></div>
               </dl>
-              <p className="note">An event opens 12 dB above the room's noise floor when the spectrum changes. Classes come from duration, brightness and pitch, so each is a likely reading. Levels are dBFS, relative to the converter, not sound pressure. Bearings are left or right of the microphone pair; front and back look the same to two microphones.</p>
-              <p className="note">Interface sounds mute the detector while they play.</p>
+              <p className="note">Estimated classes · relative dBFS levels.</p>
+
             </section>
           </>
         )}
       </aside>
 
-      <main className="view" aria-label="Point cloud">
-        <canvas ref={canvas} tabIndex={0} aria-label="3D point cloud. Drag to orbit, scroll to zoom, arrow keys also orbit." />
+      <main className={`view view--${feed}`} aria-label={`${feed} instrument`}>
+        <div className="view-heading"><h1>{feed === 'lidar' ? 'Point cloud' : feed === 'wifi' ? 'Channel spectrum' : 'Spectrogram'}</h1><span>{feed === 'lidar' ? sourceLabel : feed === 'wifi' ? s.wifi.mode === 'simulated' ? 'SIMULATION' : s.wifi.packetsPerSecond > 0 ? 'MEASURED CSI' : 'NO CSI INPUT' : s.mic.state === 'on' ? 'MICROPHONE LIVE' : 'MICROPHONE OFF'}</span></div>
+        <div className="main-signal" hidden={feed !== 'wifi'}>
+          <canvas ref={wifiCanvas} aria-label="Measured Wi-Fi subcarrier amplitudes and motion score. No spatial position is inferred." />
+          {s.wifi.mode === 'off' && <div className="signal-empty"><h2>Listen to the channel.</h2><p>ESP32 CSI input required.</p><button className="btn btn--primary" onClick={() => engine.setWifiMode('serial')} disabled={!SerialCsi.supported()}>Connect ESP32 over USB</button><button className="btn btn--quiet" onClick={() => engine.setWifiMode('simulated')}>Explore labelled simulation</button></div>}
+        </div>
+        <div className="main-signal" hidden={feed !== 'acoustic'}>
+          <canvas ref={soundCanvas} aria-label="Live microphone spectrogram and level" />
+          {s.mic.state !== 'on' && <div className="signal-empty"><h2>Hear what changes.</h2><p>Live spectrum. Estimated sound events.</p><button className="btn btn--primary" disabled={s.mic.state === 'asking'} onClick={() => engine.listen(true)}>{s.mic.state === 'asking' ? 'Waiting for permission…' : 'Enable microphone'}</button></div>}
+        </div>
+        <canvas key={cloudAttempt} ref={canvas} tabIndex={cloudStatus === 'ready' ? 0 : -1} aria-label="3D point cloud. Drag to orbit, scroll to zoom, arrow keys also orbit." />
         <div ref={labels} className="labels" aria-hidden />
-        <fieldset className="seg seg--float" aria-label="Camera">
+        {feed === 'lidar' && cloudStatus !== 'ready' && (
+          <div className="cloud-unavailable" role="status">
+            <h2>{cloudStatus === 'lost' ? '3D connection interrupted' : '3D view unavailable'}</h2>
+            <p>{cloudStatus === 'lost'
+              ? 'The browser lost its graphics connection. The 3D view will resume when it recovers.'
+              : 'This browser could not start WebGL 2. Check graphics acceleration in your browser’s system settings, then relaunch the browser, or try another browser with WebGL 2 support.'}</p>
+            <p>Acquisition and the range image below remain available.</p>
+            <button className="btn btn--primary" onClick={() => setCloudAttempt((value) => value + 1)}>Retry 3D view</button>
+          </div>
+        )}
+        <fieldset className="seg seg--float" aria-label="Camera" disabled={cloudStatus !== 'ready'}>
           {([['chase', 'Chase'], ['plan', 'Plan'], ['side', 'Side']] as const).map(([id, label], i) => (
             <label key={id} title={`Key ${i + 1}`}><input type="radio" name="camera" checked={camera === id} onChange={() => setCamera(id)} /><span>{label}</span></label>
           ))}
         </fieldset>
-        {s.source === 'bridge' && s.bridge !== 'open' && (
-          <div className="empty" role="status">
-            <p className="empty__title">{s.bridge === 'connecting' ? 'Waiting for the bridge' : 'No frames from the bridge'}</p>
-            <p>Run <code>uv run fathom-bridge --source synthetic</code> for a test room, <code>--source udp</code> with a VLP-16 on the network, or <code>--source relay</code> to watch a phone scan.</p>
-          </div>
-        )}
+        {feed === 'lidar' && cloudStatus === 'ready' && s.source === 'bridge' && !hasFrames && <Acquisition state={s} connect={() => engine.connectBridge(bridgeUrl)} demo={() => engine.useSimulator()} />}
+        {feed === 'lidar' && s.proximity.ids.length > 0 && <div className="proximity-notice" role="status"><div><strong>Proximity notice{sim || s.stats.simulated ? ' · SIMULATED' : s.source === 'recording' ? ' · REPLAY' : ''}</strong>{s.proximity.ids.length} confirmed track{s.proximity.ids.length === 1 ? '' : 's'} within {s.proximity.radius} m</div><button className="btn btn--small" disabled={s.proximity.acknowledged} onClick={() => engine.acknowledgeProximity()}>{s.proximity.acknowledged ? 'Acknowledged' : 'Acknowledge'}</button></div>}
+        {feed === 'lidar' && stale && hasFrames && <div className="stale-input" role="status">Input stale · last frame {Math.floor(s.stats.lastFrameAge)} s ago. Display holds the last measurements.</div>}
+        {feed === 'lidar' && hasFrames && <div className="view-readouts"><span><b>{compact.format(s.stats.pointsPerSecond)}</b> pts/s</span><span><b>{s.stats.seenChannels || (sim ? sensor.channels : '—')}</b> channels</span><span><b>{s.tracks.length}</b> tracks</span><span><b>{compact.format(s.stats.pointsHeld)}</b> points held</span></div>}
         {s.source === 'scan' && !s.scan && !s.scanMessage && (
           <div className="empty" role="status"><p className="empty__title">Starting the AR session</p><p>Allow camera access on the phone.</p></div>
         )}
@@ -466,7 +519,7 @@ export default function App() {
 
       <aside className="panel" aria-label="Exhibit register">
         <div className="panel__head">
-          <h2>Exhibit register</h2>
+          <h2>Observation log</h2><SessionExport state={s} />
           <span className="count">{counts.all}</span>
         </div>
         <fieldset className="seg seg--small" aria-label="Show exhibits from">
@@ -489,7 +542,7 @@ export default function App() {
           {rows.length === 0 && (
             <p className="note pad">
               {filter === 'all' || filter === 'object'
-                ? s.accumulating ? 'A room scan keeps every point and logs no objects.' : 'Objects are logged once three revolutions in a row agree on them.'
+                ? s.accumulating ? 'A room scan keeps every point and logs no objects.' : 'Awaiting observations.'
                 : filter === 'wifi' ? 'Motion near the Wi-Fi link is logged here.'
                 : filter === 'sound' ? 'Start listening in the Acoustic feed to log sound events.'
                 : 'Record, then stop: the file is sealed with its SHA-256 and logged here.'}
@@ -501,10 +554,10 @@ export default function App() {
 
       <footer className="strip">
         <div className="transport">
-          <button className="btn btn--primary" onClick={() => engine.setRunning(!s.running)} aria-keyshortcuts="Space">
+          <button className="btn btn--primary" onClick={() => engine.setRunning(!s.running)} disabled={!hasFrames} aria-keyshortcuts="Space">
             {s.running ? 'Pause scan' : 'Resume scan'}
           </button>
-          <button className={`btn ${s.recording ? 'btn--rec' : ''}`} onClick={toggleRecord} disabled={s.source === 'recording'}>
+          <button className={`btn ${s.recording ? 'btn--rec' : ''}`} onClick={toggleRecord} disabled={s.source === 'recording' || (!hasFrames && !s.recording)}>
             {s.recording ? <><i className="recdot" aria-hidden />Stop and seal · {fmt1.format(s.recordedSeconds)} s</> : 'Record'}
           </button>
           {sim && <button className="btn btn--quiet" onClick={() => engine.restartSimulation()}>Restart drive</button>}
@@ -520,6 +573,7 @@ export default function App() {
             {fmt1.format(s.stats.revolutionsPerSecond)} Hz · perception {Math.round(s.stats.perceptionMs)} ms · t {fmt1.format(s.stats.time)} s
           </span>
         </div>
+        {s.recordingNotice && <p className="recording-notice" role="status">{s.recordingNotice}</p>}
         <figure className="instrument">
           <figcaption className="sr">{feed === 'lidar' ? 'Range image' : feed === 'wifi' ? 'Wi-Fi channel state' : 'Microphone spectrum'}</figcaption>
           <div className="instrument__pane" hidden={feed !== 'lidar'}>
@@ -527,11 +581,11 @@ export default function App() {
             <canvas ref={rangeCanvas} className="rangeimg" aria-label="Range image: one row per channel, one column per bearing" />
           </div>
           <div className="instrument__pane" hidden={feed !== 'wifi'}>
-            <canvas ref={wifiCanvas} aria-label="Wi-Fi subcarrier amplitudes and motion score" />
+            <div className="signal-summary"><span className="signal-summary__value">{s.wifi.mode === 'off' ? '—' : s.wifi.moving ? 'Motion' : s.wifi.packetsPerSecond > 0 ? 'Quiet' : 'No input'}</span><span>{Math.round(s.wifi.packetsPerSecond)} packets/s · {s.wifi.packetsPerSecond ? `${Math.round(s.wifi.rssi)} dBm` : 'awaiting packets'}</span><p>Channel change only. No inferred location.</p></div>
           </div>
           <div className="instrument__pane" hidden={feed !== 'acoustic'}>
-            <canvas ref={soundCanvas} aria-label="Microphone spectrogram and level" />
-            {s.mic.state !== 'on' && <p className="instrument__empty">The spectrum appears here when the microphone is listening.</p>}
+            <div className="signal-summary"><span className="signal-summary__value">{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.levelDb)} dBFS` : 'Offline'}</span><span>{s.mic.state === 'on' ? s.mic.device : 'Enable the microphone to start'}</span><p>{s.mic.stereo ? 'Stereo input · estimated left/right bearing' : 'Mono input · no bearing available'}</p></div>
+
           </div>
         </figure>
         <figure className="timeline">
@@ -549,7 +603,7 @@ function FeedChip(props: {
   const on = props.feed === props.id
   return (
     <button className={`feed ${on ? 'is-on' : ''} ${props.alert ? 'is-alert' : ''}`} aria-pressed={on} onClick={() => props.setFeed(props.id)}>
-      <i className={`feed__dot ${props.live ? 'is-live' : ''}`} aria-hidden />
+      <InstrumentIcon name={props.id === 'lidar' ? 'sensor' : props.id === 'wifi' ? 'connection' : 'activity'} /><i className={`feed__dot ${props.live ? 'is-live' : ''}`} aria-hidden />
       <span className="feed__name">{props.name}</span>
       <span className="feed__stat num">{props.stat}</span>
       {props.sim && <span className="feed__sim">sim</span>}
@@ -565,7 +619,7 @@ function age(e: Exhibit): string {
 
 function exhibitText(e: Exhibit, s: EngineState): { title: string; measure: string } {
   if (e.kind === 'object') {
-    const t = s.tracks.find((x) => x.id === e.trackId)
+    const t = liveTrack(e, s.tracks, s.sourceRun)
     const name = CLASS_NAMES[t?.cls ?? e.cls ?? 0]
     if (!t || !e.open) return { title: name, measure: 'left the scan' }
     const range = Math.hypot(t.x - s.ego.x, t.y - s.ego.y), speed = Math.hypot(t.vx, t.vy)
@@ -597,7 +651,7 @@ function ExhibitRow({ e, s, selected, justSealed, onSelect }: {
       <td><button className={`tag tag--${e.kind}`} onClick={(ev) => { ev.stopPropagation(); onSelect() }} aria-label={`Exhibit ${e.n}`}>{e.n}</button></td>
       <td>
         <span className="row__title">{title}{e.kind === 'sound' && <em> likely</em>}</span>
-        <span className="row__measure num">{measure}</span>
+        <span className="row__measure num"><span className="provenance">{e.source ?? 'unknown'}</span> · {measure}</span>
       </td>
       <td className="num row__age">{age(e)}</td>
     </tr>
@@ -653,7 +707,7 @@ function Detail({ exhibit, track, ego, onClose }: {
   const head = (title: string, sub: string) => (
     <div className="detail__head">
       <span className={`tag tag--big tag--${exhibit.kind}`}>{exhibit.n}</span>
-      <h3>{title} <span>{sub}</span></h3>
+      <h3>{title} <span>{exhibit.source ?? 'unknown'} · {sub}</span></h3>
       <button className="btn btn--quiet btn--small" onClick={onClose}>Clear</button>
     </div>
   )
@@ -731,16 +785,6 @@ function Detail({ exhibit, track, ego, onClose }: {
       <p className="hash"><span>SHA-256</span><code>{seal.sha256}</code></p>
       <button className="btn btn--small" onClick={() => navigator.clipboard?.writeText(seal.sha256)}>Copy hash</button>
     </section>
-  )
-}
-
-function Mark() {
-  // A scene marker: a folded tent seen from the front.
-  return (
-    <svg className="mark" width="18" height="18" viewBox="0 0 18 18" aria-hidden>
-      <path d="M9 1.5 17 16.5H1Z" fill={PALETTE.exhibit} />
-      <path d="M9 1.5 9 16.5" stroke="#0d1012" strokeWidth="1.2" />
-    </svg>
   )
 }
 

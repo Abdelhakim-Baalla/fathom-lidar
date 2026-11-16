@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import ssl
 from collections.abc import AsyncIterator
 
 import numpy as np
@@ -16,7 +17,7 @@ import websockets
 
 from . import vlp16
 from .csi import csi_message, parse_csi_line
-from .frame import FLAG_REVOLUTION_END, FLAG_SIMULATED, MAGIC, encode_frame
+from .frame import FLAG_REVOLUTION_END, FLAG_SIMULATED, decode_frame, encode_frame
 
 log = logging.getLogger("fathom.bridge")
 
@@ -29,7 +30,11 @@ class Bridge:
         batch: int = 8,
         simulated: bool = False,
         csi_lines: AsyncIterator[str] | None = None,
+        origins: list[str] | None = None,
+        tls: ssl.SSLContext | None = None,
     ) -> None:
+        self.origins = origins
+        self.tls = tls
         self.packets = packets
         self.csi_lines = csi_lines
         self.csi_sent = 0
@@ -46,7 +51,12 @@ class Bridge:
         try:
             async for message in websocket:
                 # Relay frames a client sends (a phone scan) to every other client.
-                if isinstance(message, bytes) and len(message) >= 40 and message[:4] == MAGIC:
+                if isinstance(message, bytes):
+                    try:
+                        decode_frame(message)
+                    except ValueError:
+                        await websocket.close(code=1007, reason="Invalid FTHM frame")
+                        break
                     others = self.clients - {websocket}
                     if others:
                         websockets.broadcast(others, message)
@@ -116,6 +126,6 @@ class Bridge:
             self.csi_sent = self.relayed = 0
 
     async def serve(self, host: str, port: int) -> None:
-        async with websockets.serve(self.handler, host, port, max_size=None):
+        async with websockets.serve(self.handler, host, port, max_size=16_000_040, origins=self.origins, ssl=self.tls, ping_interval=10, ping_timeout=10):
             log.info("listening on ws://%s:%d", host, port)
             await asyncio.gather(self.pump(), self.pump_csi(), self.report())

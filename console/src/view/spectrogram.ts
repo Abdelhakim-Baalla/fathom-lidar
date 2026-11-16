@@ -33,7 +33,7 @@ export class Spectrogram {
     this.sgCtx = this.sg.getContext('2d')!
     this.sgCtx.fillStyle = '#0d1012'
     this.sgCtx.fillRect(0, 0, COLS, ROWS)
-    const stops = ['#0d1012', '#3a4248', '#a9a397', '#f3eee2'].map(hex)
+    const stops = ['#0d1012', '#3a4248', '#b1b4bc', '#f3eee2'].map(hex)
     for (let i = 0; i < 256; i++) {
       const f = (i / 255) * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(f)), u = f - k
       this.ramp.push([0, 1, 2].map((c) => stops[k][c] + (stops[k + 1][c] - stops[k][c]) * u) as [number, number, number])
@@ -92,7 +92,7 @@ export class Spectrogram {
     ctx.clearRect(0, 0, w, h)
     ctx.font = '600 11px "Sofia Sans Variable", system-ui, sans-serif'
     ctx.textBaseline = 'top'
-    ctx.fillStyle = '#7d7a72'
+    ctx.fillStyle = '#9c9fa8'
     const sgW = w - METER_W - 44
     ctx.fillText('Spectrum · 50 Hz – 12 kHz, log scale · 10 s', 40, 2)
     ctx.imageSmoothingEnabled = true
@@ -107,18 +107,18 @@ export class Spectrogram {
 
     // Level meter, dBFS
     const mx = w - METER_W, top = 18, mh = h - 20
-    ctx.fillStyle = '#7d7a72'
+    ctx.fillStyle = '#9c9fa8'
     ctx.fillText('dBFS', mx, 2)
     ctx.fillStyle = '#14181b'
     ctx.fillRect(mx, top, 14, mh)
     const Y = (db: number) => top + mh * (1 - Math.max(0, Math.min(1, (db + 100) / 100)))
     if (this.live) {
-      ctx.fillStyle = '#ebe5d6'
+      ctx.fillStyle = '#f4f4f5'
       const y = Y(this.analyser.levelDb)
       ctx.fillRect(mx, y, 14, top + mh - y)
-      ctx.fillStyle = '#f2c230'
+      ctx.fillStyle = '#f48142'
       ctx.fillRect(mx - 3, Y(this.analyser.floorDb + 12) - 1, 20, 2)
-      ctx.fillStyle = '#a9a397'
+      ctx.fillStyle = '#b1b4bc'
       ctx.fillText(`${Math.round(this.analyser.levelDb)}`, mx + 20, Math.min(top + mh - 12, y - 6))
     }
   }

@@ -122,8 +122,13 @@ export function decodeFrame(buffer: ArrayBuffer): Frame {
   const version = dv.getUint16(4, true)
   if (version !== VERSION) throw new FrameError(`Unsupported frame version ${version}`)
   const pointCount = dv.getUint32(12, true)
-  if (buffer.byteLength < frameByteLength(pointCount)) {
-    throw new FrameError('Frame is truncated: fewer bytes than its point count needs')
+  if (pointCount > 1_000_000 || buffer.byteLength !== frameByteLength(pointCount)) {
+    throw new FrameError('Frame is truncated or has bytes beyond its point count')
+  }
+  if (![dv.getFloat64(16, true), dv.getFloat32(24, true), dv.getFloat32(28, true), dv.getFloat32(32, true), dv.getFloat32(36, true)].every(Number.isFinite)) throw new FrameError('Frame pose and timestamp must be finite')
+  const coords = new Float32Array(buffer, HEADER_BYTES, pointCount * 4)
+  for (let i = 0; i < pointCount; i++) {
+    if (!Number.isFinite(coords[i * 4]) || !Number.isFinite(coords[i * 4 + 1]) || !Number.isFinite(coords[i * 4 + 2])) throw new FrameError('Point coordinates must be finite')
   }
   return viewFrame(buffer, pointCount, {
     flags: dv.getUint16(6, true),

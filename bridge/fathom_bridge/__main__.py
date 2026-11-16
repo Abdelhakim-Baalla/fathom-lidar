@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import ssl
 from pathlib import Path
 
 from .csi import serial_lines
@@ -17,7 +18,7 @@ def main() -> None:
         prog="fathom-bridge",
         description="Forward VLP-16 packets, ESP32 Wi-Fi CSI and phone scans to the Fathom console.",
     )
-    parser.add_argument("--source", choices=["synthetic", "udp", "pcap", "relay"], default="synthetic",
+    parser.add_argument("--source", choices=["synthetic", "udp", "pcap", "relay"], default="relay",
                         help="synthetic: a generated room, no sensor needed; udp: a live sensor; pcap: a capture file; "
                              "relay: no LiDAR, only relay phone scans and CSI")
     parser.add_argument("--file", type=Path, help="capture to replay when --source pcap")
@@ -28,7 +29,16 @@ def main() -> None:
     parser.add_argument("--csi-serial", metavar="PORT", help="ESP32 running esp-csi, e.g. /dev/ttyUSB0 or COM3")
     parser.add_argument("--csi-baud", type=int, default=921600)
     parser.add_argument("--no-loop", action="store_true", help="stop at the end of a capture instead of repeating it")
+    parser.add_argument("--cert", type=Path, help="TLS certificate for an HTTPS console's wss:// connection")
+    parser.add_argument("--key", type=Path, help="TLS private key (required with --cert)")
+    parser.add_argument("--allow-origin", action="append", help="Allowed browser origin; repeat for multiple consoles")
     args = parser.parse_args()
+    if bool(args.cert) != bool(args.key):
+        parser.error("--cert and --key must be supplied together")
+    tls = None
+    if args.cert:
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(args.cert, args.key)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
 
@@ -46,7 +56,7 @@ def main() -> None:
         packets = synthetic_packets()
 
     csi = serial_lines(args.csi_serial, args.csi_baud) if args.csi_serial else None
-    bridge = Bridge(packets, simulated=args.source == "synthetic", csi_lines=csi)
+    bridge = Bridge(packets, simulated=args.source == "synthetic", csi_lines=csi, origins=args.allow_origin, tls=tls)
     try:
         asyncio.run(bridge.serve(args.ws_host, args.ws_port))
     except KeyboardInterrupt:

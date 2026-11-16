@@ -1,0 +1,29 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; color: #f4f4f5; background: #101114; }
+* { box-sizing: border-box; }
+body { margin: 0; font-size: 17px; line-height: 1.8; }
+a { color: #f48142; text-underline-offset: 5px; }
+a:hover { color: #ffac7f; }
+:focus-visible { outline: 2px solid #f48142; outline-offset: 5px; }
+::selection { background: #f48142; color: #17100c; }
+header, main, footer { max-width: 1080px; margin: auto; padding: 32px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid #33363c; }
+header img { display: block; max-width: 100%; }
+h1 { font-size: clamp(36px, 5.8vw, 68px); font-weight: 600; letter-spacing: -.035em; line-height: 1.08; text-wrap: balance; max-width: 900px; margin: 44px 0 24px; }
+h2 { font-size: 27px; font-weight: 600; line-height: 1.25; margin: 52px 0 20px; scroll-margin-top: 24px; }
+p, li { max-width: 70ch; color: #c1c3c9; }
+p { margin: 16px 0; }
+strong { color: #f4f4f5; font-weight: 600; }
+.lead { font-size: 20px; line-height: 1.65; max-width: 65ch; }
+.launch { display: inline-block; background: #f48142; color: #17100c; text-decoration: none; font-weight: 650; padding: 10px 24px; margin: 16px 0; border-radius: 3px; }
+.launch:hover { background: #ff9b64; color: #17100c; }
+.contents { margin: 32px 0 52px; padding: 24px 0; border-block: 1px solid #33363c; }
+.contents h2 { font-size: 18px; margin: 0 0 12px; }
+.contents ol, .related ul { list-style: none; padding: 0; margin: 0; }
+.contents li, .related li { margin: 8px 0; }
+code { background: #23252b; padding: 3px 6px; border-radius: 2px; font-size: .82em; overflow-wrap: anywhere; }
+.related { border-top: 1px solid #33363c; margin-top: 56px; padding-bottom: 32px; }
+footer { display: flex; flex-wrap: wrap; gap: 12px 24px; border-top: 1px solid #33363c; font-size: 13px; }
+footer span { color: #a4a5a8; margin-left: auto; }
+.skip { position: fixed; top: 8px; left: 8px; padding: 10px 20px; background: #101114; transform: translateY(-160%); z-index: 1; }
+.skip:focus { transform: none; }
+@media(max-width:600px) { header, main, footer { padding: 24px; } header img { width: 140px; height: auto; } header a { font-size: 14px; } h1 { margin-top: 28px; } h2 { font-size: 24px; } body { font-size: 16px; } footer span { margin-left: 0; } }

@@ -16,7 +16,6 @@ import asyncio
 import json
 import logging
 import math
-import threading
 import time
 from collections.abc import AsyncIterator
 
@@ -56,23 +55,14 @@ async def serial_lines(port: str, baud: int) -> AsyncIterator[str]:
     except ImportError as error:
         raise SystemExit("Reading an ESP32 needs pyserial: uv sync --extra csi") from error
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=2000)
-
-    def reader() -> None:
-        with serial.Serial(port, baud, timeout=1) as dev:
-            log.info("reading CSI from %s at %d baud", port, baud)
-            while True:
-                raw = dev.readline()
-                if raw:
-                    text = raw.decode("ascii", errors="replace")
-                    loop.call_soon_threadsafe(_put, queue, text)
-
-    threading.Thread(target=reader, daemon=True).start()
-    while True:
-        yield await queue.get()
-
-
-def _put(queue: asyncio.Queue[str], item: str) -> None:
-    if not queue.full():
-        queue.put_nowait(item)
+    # Opening and reading off the event loop propagates device errors to the
+    # bridge instead of silently killing a detached reader thread.
+    dev = await asyncio.to_thread(serial.Serial, port, baud, timeout=1)
+    log.info("reading CSI from %s at %d baud", port, baud)
+    try:
+        while True:
+            raw = await asyncio.to_thread(dev.readline)
+            if raw:
+                yield raw.decode("ascii", errors="replace")
+    finally:
+        await asyncio.to_thread(dev.close)

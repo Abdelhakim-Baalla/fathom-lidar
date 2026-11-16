@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/</loc></url>
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/about.html</loc></url>
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/guides/lidar-point-cloud.html</loc></url>
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/guides/esp32-wifi-csi.html</loc></url>
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/guides/acoustic-spectrum.html</loc></url>
+  <url><loc>https://abdelhakim-baalla.github.io/fathom-lidar/guides/phone-depth-scanning.html</loc></url>
+</urlset>

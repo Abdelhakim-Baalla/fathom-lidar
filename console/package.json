@@ -5,12 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/seo.mjs && tsc -b && vite build && node scripts/verify-site.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -b",
-    "dev:phone": "FATHOM_HTTPS=1 vite"
+    "dev:phone": "FATHOM_HTTPS=1 vite",
+    "seo": "node scripts/seo.mjs"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",

@@ -88,7 +88,7 @@ export class Timeline {
       const inverted = this.flashLane === i
       ctx.fillStyle = inverted ? p.ink : i % 2 ? '#14181b' : '#171b1e'
       ctx.fillRect(LABEL_W, y, w - LABEL_W, laneH - 2)
-      ctx.fillStyle = '#a9a397'
+      ctx.fillStyle = '#b1b4bc'
       ctx.font = FONT
       ctx.textBaseline = 'middle'
       ctx.fillText(lane.label, 0, y + laneH / 2)
@@ -127,7 +127,7 @@ export class Timeline {
 
     // Time axis: every ten seconds back from now.
     const ay = LANES.length * laneH + axisH / 2
-    ctx.fillStyle = '#7d7a72'
+    ctx.fillStyle = '#9c9fa8'
     ctx.font = FONT
     for (let s = 0; s <= WINDOW_S; s += 10) {
       const xx = x(now - s)

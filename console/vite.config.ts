@@ -16,6 +16,12 @@ export default defineConfig({
     proxy: { '/bridge': { target: 'ws://127.0.0.1:8765', ws: true, rewrite: () => '/' } },
   },
   worker: { format: 'es' },
-  // three.js alone is about 700 kB minified; one chunk loads faster than a waterfall here.
-  build: { chunkSizeWarningLimit: 900 },
+  // Cache the renderer independently when the console or identity changes.
+  // Vite emits a modulepreload link so this does not add a discovery waterfall.
+  build: {
+    chunkSizeWarningLimit: 900,
+    rolldownOptions: {
+      output: { codeSplitting: { groups: [{ name: 'three', test: /node_modules\/three\// }] } },
+    },
+  },
 })

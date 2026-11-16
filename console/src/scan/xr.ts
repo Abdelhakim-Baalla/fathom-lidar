@@ -105,6 +105,7 @@ export class PhoneScan {
       return `The phone refused the AR session: ${(err as Error).message}. Depth sensing needs an ARCore phone with depth support.`
     }
     this.session = session
+    overlay.classList.add('is-xr-active')
     const canvas = document.createElement('canvas')
     this.gl = canvas.getContext('webgl', { xrCompatible: true }) as WebGLRenderingContext
     await session.updateRenderState({ baseLayer: new XRWebGLLayer(session, this.gl) })
@@ -116,6 +117,7 @@ export class PhoneScan {
     this.stats = { points: 0, frames: 0, depthWidth: 0, depthHeight: 0, travelled: 0 }
     session.addEventListener('end', () => {
       this.session = null
+      overlay.classList.remove('is-xr-active')
       this.onEnd()
     })
     session.requestAnimationFrame(this.frame)

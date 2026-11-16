@@ -1,0 +1,54 @@
+/* Concentric instruments resolve into the original Fathom mark. */
+.intro { position: fixed; inset: 0; width: 100%; max-width: none; height: 100dvh; max-height: none; margin: 0; padding: 0; border: 0; background: #08090b; color: var(--ink); overflow: auto; }
+.intro[open] { display: grid; grid-template-rows: 72px minmax(240px, 1fr) 86px 54px; }
+.intro::backdrop { background: #08090b; }
+.intro__header, .intro__footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 clamp(20px, 4vw, 64px); }
+.intro__header { border-bottom: 1px solid #ffffff0d; }
+.intro__header .btn { color: #b5b6ba; }
+.intro__header kbd { font: 10px var(--mono); margin-left: 12px; color: #8d9098; }
+.intro__footer { font: 500 10px var(--sans); letter-spacing: .12em; color: #9c9fa6; border-top: 1px solid #ffffff0d; }
+.intro__stage { position: relative; display: grid; place-items: center; overflow: hidden; perspective: 1100px; isolation: isolate; }
+.intro__reticle { position: absolute; width: min(77vh, 710px, 94vw); height: auto; color: #f48142; opacity: .7; }
+.reticle-frame { opacity: .23; }
+.reticle-hairline { opacity: .2; }
+.reticle-ticks { stroke: #e8e9ec; opacity: .6; }
+.reticle-orbit, .reticle-sweep { transform-origin: 360px 360px; }
+.reticle-orbit--outer { opacity: .8; }
+.reticle-orbit--middle { stroke: #f4f4f5; opacity: .32; }
+.reticle-orbit--inner { opacity: .45; }
+.reticle-cross { stroke: #fff; opacity: .5; }
+.reticle-sweep, .reticle-contacts { opacity: 0; }
+.intro__sideband { position: absolute; width: min(13vw, 180px); height: auto; color: #f48142; opacity: .3; }
+.intro__sideband--left { left: 5%; }
+.intro__sideband--right { right: 5%; transform: scaleX(-1); }
+.intro__identity { z-index: 1; display: flex; align-items: center; flex-direction: column; gap: 22px; }
+.intro__mark { width: 48px; height: 48px; }
+.intro__wordmark { width: clamp(170px, 24vw, 320px); height: auto; }
+.intro__descriptor { font: 550 11px var(--sans); letter-spacing: .32em; color: #b9bbc0; margin-left: .32em; }
+.intro__controls { display: flex; align-items: center; justify-content: center; gap: 20px; position: relative; padding: 12px 20px; }
+.intro__controls .btn { min-height: 44px; padding-inline: 24px; }
+.intro__error { position: absolute; bottom: 0; font-size: 12px; color: var(--seal); }
+.intro__scan { position: absolute; width: min(780px, 94vw); height: 1px; background: #f48142; opacity: 0; pointer-events: none; }
+.intro__progress { position: fixed; height: 2px; bottom: 0; left: 0; right: 0; background: #f48142; transform: scaleX(0); transform-origin: left; }
+.intro--playing .intro__reticle { animation: reticle-approach 6.4s cubic-bezier(.22,.68,0,1) both; }
+.intro--playing .reticle-orbit--outer { animation: orbit-clockwise 5.8s cubic-bezier(.16,.8,.2,1) both; }
+.intro--playing .reticle-orbit--middle { animation: orbit-counter 5.8s cubic-bezier(.16,.8,.2,1) both; }
+.intro--playing .reticle-orbit--inner { animation: orbit-clockwise 5.2s cubic-bezier(.16,.8,.2,1) both; }
+.intro--playing .reticle-sweep { animation: reticle-sweep 3.8s linear both; }
+.intro--playing .reticle-contacts { animation: contacts-resolve 3.8s ease-out both; }
+.intro--playing .intro__identity { animation: identity-reveal 6.4s cubic-bezier(.16,1,.3,1) both; }
+.intro--playing .intro__sideband { animation: sideband-resolve 6.4s ease-out both; }
+.intro--playing .intro__scan { animation: intro-scan 3.8s ease-in-out both; }
+.intro--playing .intro__progress { animation: intro-progress 6.4s linear both; }
+@keyframes reticle-approach { 0% { transform: rotateX(38deg) rotateZ(-24deg) scale(1.18); opacity:.25; } 35% { transform: rotateX(0) rotateZ(0) scale(1); opacity:.85; } 68% { transform: scale(.96); opacity:.65; } 85%,100% { transform: scale(1.25); opacity:.12; } }
+@keyframes orbit-clockwise { from { transform: rotate(-100deg); } to { transform: rotate(260deg); } }
+@keyframes orbit-counter { from { transform: rotate(70deg); } to { transform: rotate(-220deg); } }
+@keyframes reticle-sweep { 0% { transform: rotate(-90deg); opacity:0; } 15% { opacity:.9; } 85% { opacity:.5; } 100% { transform: rotate(540deg); opacity:0; } }
+@keyframes contacts-resolve { 0%,25% { opacity:0; } 40%,80% { opacity:1; } 100% { opacity:0; } }
+@keyframes identity-reveal { 0%,38% { opacity:0; transform: scale(.88); clip-path: inset(48% 0); } 56% { opacity:1; clip-path: inset(0); transform: scale(1); } 100% { opacity:1; transform: scale(1); } }
+@keyframes sideband-resolve { 0% { opacity:0; } 25%,58% { opacity:.6; } 90%,100% { opacity:.12; } }
+@keyframes intro-scan { 0% { transform: translateY(-200px); opacity:0; } 20%,75% { opacity:.7; } 100% { transform: translateY(200px); opacity:0; } }
+@keyframes intro-progress { to { transform:scaleX(1); } }
+@media(max-width:760px) { .intro__sideband { display:none; } .intro__wordmark { width:min(52vw, 280px); } .intro__reticle { width:min(72vh, 115vw); } .intro__controls { gap:8px; } .intro__controls .btn { padding-inline:16px; } }
+@media(max-height:540px) { .intro[open] { grid-template-rows:48px minmax(200px, 1fr) 64px 32px; } .intro__identity { gap:12px; } .intro__mark { width:32px; height:32px; } .intro__wordmark { width:180px; } }
+@media(prefers-reduced-motion:reduce) { .intro--playing *, .intro--playing .intro__reticle { animation:none !important; } .intro__progress { display:none; } }

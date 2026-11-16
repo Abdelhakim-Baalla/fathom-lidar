@@ -17,6 +17,8 @@ export interface Seal {
  * Times are seconds on the session clock.
  */
 export interface Exhibit {
+  source?: 'simulation' | 'sensor' | 'replay' | 'microphone'
+  sourceRun?: number
   n: number
   kind: ExhibitKind
   start: number

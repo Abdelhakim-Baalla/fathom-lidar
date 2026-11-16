@@ -8,7 +8,7 @@ const ON = 2.6
 
 /**
  * Three views of one Wi-Fi link: the room plan (simulation only), a waterfall of
- * subcarrier amplitudes over ten seconds, and the motion score against its threshold.
+ * subcarrier amplitudes over recent received samples, and the motion score against its threshold.
  */
 export class WifiView {
   private ctx: CanvasRenderingContext2D
@@ -23,6 +23,7 @@ export class WifiView {
   private w = 0
   private h = 0
   private canvas: HTMLCanvasElement
+  private fresh = false
   private rows = 56
   private ramp: Array<[number, number, number]> = []
 
@@ -55,6 +56,7 @@ export class WifiView {
   }
 
   push(norm: Float32Array, score: number, moving: boolean, people: Person[] | null): void {
+    this.fresh = true
     this.latest = norm
     this.people = people
     this.score.push(score)
@@ -64,6 +66,7 @@ export class WifiView {
 
   clear(): void {
     this.latest = null
+    this.people = null
     this.score = []
     this.moving = []
     this.wfCtx.fillStyle = '#0d1012'
@@ -81,7 +84,8 @@ export class WifiView {
 
   private scroll(): void {
     const a = this.latest
-    if (!a) return
+    if (!a || !this.fresh) return
+    this.fresh = false
     if (a.length !== this.rows) {
       this.rows = a.length
       this.wf.height = this.rows
@@ -109,13 +113,13 @@ export class WifiView {
     ctx.textBaseline = 'top'
 
     // Plan
-    const showPlan = this.people !== null
+    const showPlan = this.people !== null && w > 640
     let x0 = 0
     if (showPlan) {
       const s = Math.min((PLAN_W - 16) / ROOM.width, (h - 24) / ROOM.depth)
       const ox = 4, oy = 18
       const X = (x: number) => ox + x * s, Y = (y: number) => oy + (ROOM.depth - y) * s
-      ctx.fillStyle = '#7d7a72'
+      ctx.fillStyle = '#a8adb6'
       ctx.fillText('Room 8 × 6 m · ground truth', 4, 2)
       ctx.fillStyle = '#1f2529'
       ctx.fillRect(X(0), Y(ROOM.depth), ROOM.width * s, ROOM.depth * s)
@@ -147,33 +151,34 @@ export class WifiView {
         ctx.stroke()
       }
       // door
-      ctx.fillStyle = '#7d7a72'
+      ctx.fillStyle = '#a8adb6'
       ctx.fillRect(X(ROOM.door[0]) - 6, Y(ROOM.door[1]) - 1, 12, 2)
       x0 = PLAN_W + 8
     }
 
     // Waterfall
-    const wfW = w - x0 - TRACE_W - 12
-    ctx.fillStyle = '#7d7a72'
-    ctx.fillText(`Subcarrier amplitude · ${this.rows} subcarriers × 10 s`, x0, 2)
+    const traceWidth = Math.min(TRACE_W, w * 0.32)
+    const wfW = Math.max(1, w - x0 - traceWidth - 12)
+    ctx.fillStyle = '#a8adb6'
+    ctx.fillText(`Subcarrier amplitude · ${this.rows} subcarriers · recent samples`, x0, 2)
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(this.wf, x0, 18, wfW, h - 20)
 
     // Motion score
-    const tx0 = w - TRACE_W
+    const tx0 = w - traceWidth
     ctx.fillText('Motion score, × quiet floor', tx0, 2)
     const top = 18, bh = h - 20
     ctx.fillStyle = '#14181b'
-    ctx.fillRect(tx0, top, TRACE_W, bh)
+    ctx.fillRect(tx0, top, traceWidth, bh)
     const max = 8
     const Ys = (v: number) => top + bh - (Math.min(v, max) / max) * bh
     const n = this.score.length
     for (let i = 0; i < n; i++) {
       if (!this.moving[i]) continue
       ctx.fillStyle = 'rgba(91,134,255,0.22)'
-      ctx.fillRect(tx0 + (i / COLS) * TRACE_W, top, TRACE_W / COLS + 0.5, bh)
+      ctx.fillRect(tx0 + (i / COLS) * traceWidth, top, traceWidth / COLS + 0.5, bh)
     }
-    ctx.strokeStyle = '#7d7a72'
+    ctx.strokeStyle = '#a8adb6'
     ctx.setLineDash([3, 3])
     ctx.beginPath(); ctx.moveTo(tx0, Ys(ON)); ctx.lineTo(w, Ys(ON)); ctx.stroke()
     ctx.setLineDash([])
@@ -181,12 +186,12 @@ export class WifiView {
     ctx.lineWidth = 1.5
     ctx.beginPath()
     for (let i = 0; i < n; i++) {
-      const xx = tx0 + ((i + COLS - n) / COLS) * TRACE_W
+      const xx = tx0 + ((i + COLS - n) / COLS) * traceWidth
       if (i === 0) ctx.moveTo(xx, Ys(this.score[i]))
       else ctx.lineTo(xx, Ys(this.score[i]))
     }
     ctx.stroke()
-    ctx.fillStyle = '#a9a397'
+    ctx.fillStyle = '#c3c6cd'
     ctx.fillText('threshold', tx0 + 4, Ys(ON) - 14)
   }
 }

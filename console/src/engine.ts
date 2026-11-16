@@ -1,3 +1,4 @@
+import { nearbyTracks } from './proximity'
 import type { SoundEvent } from './acoustic/analyse'
 import { Listener, type MicState } from './acoustic/listener'
 import { Cues } from './audio/cues'
@@ -12,11 +13,12 @@ import type { RangeImage } from './view/rangeImage'
 import type { Spectrogram } from './view/spectrogram'
 import type { Timeline } from './view/timeline'
 import type { WifiView } from './view/wifiView'
+import { SerialCsi } from './wifi/serial'
 import { WifiSim } from './wifi/csi'
 import { MotionDetector, type MotionEpisode } from './wifi/motion'
 
 export type SourceKind = 'simulator' | 'bridge' | 'recording' | 'scan'
-export type WifiMode = 'simulated' | 'esp32' | 'off'
+export type WifiMode = 'simulated' | 'esp32' | 'serial' | 'off'
 
 export interface WifiState {
   mode: WifiMode
@@ -40,6 +42,8 @@ export interface MicInfo {
 export type BridgeState = 'idle' | 'connecting' | 'open' | 'closed' | 'error'
 
 export interface Stats {
+  receivedFrames: number
+  lastFrameAge: number
   pointsPerSecond: number
   returnRate: number
   revolutionsPerSecond: number
@@ -55,6 +59,7 @@ export interface Stats {
 }
 
 export interface EngineState {
+  sourceRun: number
   source: SourceKind
   running: boolean
   bridge: BridgeState
@@ -76,6 +81,9 @@ export interface EngineState {
   wifi: WifiState
   mic: MicInfo
   sounds: boolean
+  volume: number
+  recordingNotice: string
+  proximity: { enabled: boolean; radius: number; ids: number[]; acknowledged: boolean }
 }
 
 const MAX_RECORDED_BYTES = 400 * 1024 * 1024
@@ -88,14 +96,18 @@ const LOG_AFTER_HITS = 8
  */
 export class Engine {
   private worker: Worker
-  private views: { cloud: CloudView; range: RangeImage } | null = null
+  private views: { cloud: CloudView | null; range: RangeImage } | null = null
   private instruments: { wifi: WifiView; spectrogram: Spectrogram; timeline: Timeline } | null = null
   readonly listener = new Listener()
   readonly cues = new Cues()
   private register: Exhibit[] = []
   private nextExhibit = 1
+  private sourceRun = 0
   private trackExhibit = new Map<number, Exhibit>()
   private soundExhibit = new Map<number, Exhibit>()
+  readonly serial = new SerialCsi()
+  private lastFrameAt = 0
+  private lastCsiAt = 0
   private wifiSim = new WifiSim()
   private motion = new MotionDetector()
   private wifiTimer = 0
@@ -126,8 +138,9 @@ export class Engine {
   private window = { start: performance.now(), points: 0, rays: 0, revs: 0 }
 
   state: EngineState = {
-    source: 'simulator',
-    running: true,
+    sourceRun: 0,
+    source: 'bridge',
+    running: false,
     bridge: 'idle',
     bridgeMessage: '',
     recording: false,
@@ -137,16 +150,19 @@ export class Engine {
     tracks: [],
     ego: { x: 0, y: 0 },
     stats: {
-      pointsPerSecond: 0, returnRate: 0, revolutionsPerSecond: 0, perceptionMs: 0,
-      pointsHeld: 0, frameId: 0, time: 0, simulated: true, seenChannels: 0, seenRange: 0,
+      receivedFrames: 0, lastFrameAge: -1, pointsPerSecond: 0, returnRate: 0, revolutionsPerSecond: 0, perceptionMs: 0,
+      pointsHeld: 0, frameId: 0, time: 0, simulated: false, seenChannels: 0, seenRange: 0,
     },
     exhibits: [],
     accumulating: false,
     scan: null,
     scanMessage: '',
-    wifi: { mode: 'simulated', link: 'idle', message: '', index: 0, score: 0, moving: false, rssi: 0, packetsPerSecond: 0, people: 2 },
+    wifi: { mode: 'off', link: 'idle', message: '', index: 0, score: 0, moving: false, rssi: 0, packetsPerSecond: 0, people: 2 },
     mic: { state: 'off', message: '', device: '', stereo: false },
     sounds: false,
+    volume: 35,
+    recordingNotice: '',
+    proximity: { enabled: false, radius: 8, ids: [], acknowledged: false },
   }
 
   constructor(env: Environment) {
@@ -154,7 +170,7 @@ export class Engine {
     this.worker = new Worker(new URL('./sim/worker.ts', import.meta.url), { type: 'module' })
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => this.onWorker(e.data)
     this.post({ type: 'configure', sensor: this.sensor, env })
-    this.post({ type: 'run', running: true })
+    this.post({ type: 'run', running: false })
     this.statsTimer = window.setInterval(() => this.tickStats(), 500)
 
     this.listener.clock = clock
@@ -173,13 +189,20 @@ export class Engine {
       this.relay = null
       this.emit({ scanMessage: `Scan finished: ${this.state.scan?.points.toLocaleString('en-GB') ?? 0} points kept.` })
     }
-    this.setWifiMode('simulated')
+    this.serial.onPacket = (p) => this.onCsi(clock(), p.amp, p.rssi)
+    this.serial.onStatus = (connected, message) => {
+      if (this.state.wifi.mode !== 'serial') return
+      this.emit({ wifi: { ...this.state.wifi, link: connected ? 'open' : 'closed', message } })
+      this.cues.play(connected ? 'connect' : 'disconnect')
+    }
   }
 
   dispose(): void {
     this.leaveSource()
     clearInterval(this.wifiTimer)
     this.wifiSocket?.close()
+    void this.serial.disconnect()
+    this.cues.dispose()
     this.listener.stop()
     this.worker.terminate()
     clearInterval(this.statsTimer)
@@ -200,15 +223,25 @@ export class Engine {
     this.worker.postMessage(m, transfer)
   }
 
-  attach(cloud: CloudView, range: RangeImage): void {
+  attach(cloud: CloudView | null, range: RangeImage): void {
     this.views = { cloud, range }
-    cloud.exhibitOf = (id) => this.exhibitOfTrack(id)
-    cloud.setOutline(this.outline)
-    cloud.setMaxRange(this.sensor.maxRange)
-    cloud.setBeam(this.sensor.fovUp, this.sensor.fovDown)
+    this.attachCloud(cloud)
     range.setChannels(this.sensor.channels)
     range.setMaxRange(this.sensor.maxRange)
     range.setBeam(this.sensor.fovUp, this.sensor.fovDown)
+  }
+
+  /** The GPU view can restart without interrupting acquisition or the range image. */
+  attachCloud(cloud: CloudView | null): void {
+    if (!this.views) return
+    this.views.cloud = cloud
+    if (!cloud) return
+    cloud.exhibitOf = (id) => this.exhibitOfTrack(id)
+    cloud.setOutline(this.state.source === 'simulator' ? this.outline : null)
+    cloud.setMaxRange(this.state.stats.seenRange || this.sensor.maxRange)
+    cloud.setBeam(this.sensor.fovUp, this.sensor.fovDown)
+    cloud.setRunning(this.state.running)
+    cloud.setTracks(this.state.tracks, this.state.stats.time)
   }
 
   detach(): void {
@@ -238,7 +271,8 @@ export class Engine {
   // ── Exhibits ────────────────────────────────────────────────────────────
 
   private addExhibit(e: Omit<Exhibit, 'n'>): Exhibit {
-    const ex = { ...e, n: this.nextExhibit++ } as Exhibit
+    const source = e.kind === 'sound' ? 'microphone' : e.kind === 'wifi' ? e.wifi?.source === 'simulated' ? 'simulation' : 'sensor' : this.state.source === 'recording' ? 'replay' : this.state.stats.simulated ? 'simulation' : 'sensor'
+    const ex = { ...e, source, sourceRun: this.sourceRun, n: this.nextExhibit++ } as Exhibit
     this.register.push(ex)
     if (this.register.length > MAX_EXHIBITS) this.register.shift()
     this.emit({ exhibits: [...this.register] })
@@ -284,13 +318,21 @@ export class Engine {
   private recentlyLost(t: Track, now: number): Exhibit | undefined {
     for (let i = this.register.length - 1, seen = 0; i >= 0 && seen < 80; i--, seen++) {
       const e = this.register[i]
-      if (e.kind !== 'object' || e.open || !e.at || now - e.end > 4) continue
+      if (e.sourceRun !== this.sourceRun || e.kind !== 'object' || e.open || !e.at || now - e.end > 4) continue
       if (Math.hypot(e.at.x - t.x, e.at.y - t.y) < 2.5) return e
     }
     return undefined
   }
 
   /** Close every open object exhibit and forget track numbers: the tracker restarts. */
+  private invalidateLiveTracks(): void {
+    this.closeTracks()
+    this.views?.cloud?.setTracks([], this.state.stats.time)
+    this.views?.range.setContacts([], () => undefined)
+    this.state.tracks = []
+    this.state.proximity = { ...this.state.proximity, ids: [], acknowledged: false }
+  }
+
   private closeTracks(): void {
     for (const ex of this.trackExhibit.values()) ex.open = false
     this.trackExhibit.clear()
@@ -312,7 +354,7 @@ export class Engine {
   }
 
   private onMotion(e: MotionEpisode): void {
-    const source = this.state.wifi.mode === 'esp32' ? 'esp32' : 'simulated'
+    const source = this.state.wifi.mode === 'esp32' || this.state.wifi.mode === 'serial' ? 'esp32' : 'simulated'
     if (!this.wifiEpisode || this.wifiEpisode.start !== e.start) {
       this.wifiEpisode = this.addExhibit({ kind: 'wifi', start: e.start, end: e.end, open: e.open, wifi: { peak: e.peak, source } })
       this.cues.play('motion')
@@ -326,7 +368,22 @@ export class Engine {
 
   // ── Wi-Fi ───────────────────────────────────────────────────────────────
 
+  configureProximity(enabled: boolean, radius = this.state.proximity.radius): void {
+    this.emit({ proximity: { enabled, radius, ids: [], acknowledged: false } })
+  }
+
+  acknowledgeProximity(): void {
+    this.cues.stopSequence()
+    this.emit({ proximity: { ...this.state.proximity, acknowledged: true } })
+  }
+
+  setVolume(volume: number): void {
+    this.cues.setVolume(volume / 100)
+    this.emit({ volume })
+  }
+
   setWifiMode(mode: WifiMode, url?: string): void {
+    void this.serial.disconnect()
     clearInterval(this.wifiTimer)
     this.wifiSocket?.close()
     this.wifiSocket = null
@@ -334,7 +391,7 @@ export class Engine {
     this.instruments?.wifi.clear()
     if (this.wifiEpisode?.open) this.wifiEpisode.open = false
     this.wifiEpisode = null
-    this.emit({ wifi: { ...this.state.wifi, mode, link: 'idle', message: '', moving: false, score: 0, index: 0 } })
+    this.emit({ wifi: { ...this.state.wifi, mode, link: 'idle', message: '', moving: false, score: 0, index: 0, packetsPerSecond: 0, rssi: 0 } })
     if (mode === 'simulated') {
       // 100 packets a second, as an ESP32 is usually configured to send.
       let last = performance.now()
@@ -347,6 +404,8 @@ export class Engine {
           this.onCsi(clock() - steps * 0.01, p.amp, p.rssi)
         }
       }, 20)
+    } else if (mode === 'serial') {
+      void this.serial.connect()
     } else if (mode === 'esp32' && url) {
       this.connectCsi(url)
     }
@@ -367,16 +426,16 @@ export class Engine {
     }
     this.wifiSocket = socket
     this.emit({ wifi: { ...this.state.wifi, link: 'connecting', message: url } })
-    socket.onopen = () => this.emit({ wifi: { ...this.state.wifi, link: 'open', message: 'Waiting for CSI packets from the ESP32.' } })
-    socket.onerror = () => this.emit({ wifi: { ...this.state.wifi, link: 'error', message: `No bridge answered at ${url}` } })
+    socket.onopen = () => { if (this.wifiSocket !== socket) return; this.emit({ wifi: { ...this.state.wifi, link: 'open', message: 'Waiting for CSI packets from the ESP32.' } }) }
+    socket.onerror = () => { if (this.wifiSocket !== socket) return; this.emit({ wifi: { ...this.state.wifi, link: 'error', message: `No bridge answered at ${url}` } }) }
     socket.onclose = () => {
       if (this.wifiSocket === socket && this.state.wifi.link !== 'error') this.emit({ wifi: { ...this.state.wifi, link: 'closed', message: `${url} closed the connection` } })
     }
     socket.onmessage = (e) => {
-      if (typeof e.data !== 'string') return
+      if (this.wifiSocket !== socket || typeof e.data !== 'string') return
       try {
         const m = JSON.parse(e.data) as { type?: string; rssi?: number; amp?: number[] }
-        if (m.type === 'csi' && Array.isArray(m.amp)) this.onCsi(clock(), Float32Array.from(m.amp), m.rssi ?? 0)
+        if (m.type === 'csi' && Array.isArray(m.amp) && m.amp.length >= 2 && m.amp.length <= 1024 && m.amp.every(v => Number.isFinite(v) && v >= 0) && Number.isFinite(m.rssi)) this.onCsi(clock(), Float32Array.from(m.amp), m.rssi ?? 0)
       } catch {
         /* not ours */
       }
@@ -384,6 +443,7 @@ export class Engine {
   }
 
   private onCsi(t: number, amp: Float32Array, rssi: number): void {
+    this.lastCsiAt = performance.now()
     if (this.wifiPackets === 0 && this.state.wifi.mode === 'esp32' && this.state.wifi.link === 'open') {
       this.state.wifi.message = `Receiving CSI from the ESP32 on ${amp.length} subcarriers`
     }
@@ -413,8 +473,8 @@ export class Engine {
   /** Start an AR depth scan on this phone; frames also go to a bridge when one is given. */
   async startScan(overlay: HTMLElement, relayUrl: string | null): Promise<void> {
     this.leaveSource()
-    this.views?.cloud.clear()
-    this.views?.cloud.setOutline(null)
+    this.views?.cloud?.clear()
+    this.views?.cloud?.setOutline(null)
     this.closeTracks()
     this.emit({ source: 'scan', running: true, tracks: [], scan: null, scanMessage: '' })
     if (relayUrl) {
@@ -427,6 +487,7 @@ export class Engine {
     }
     const err = await this.phone.begin(overlay)
     if (err) this.emit({ scanMessage: err })
+    else this.cues.play('scan')
   }
 
   endScan(): void {
@@ -440,8 +501,8 @@ export class Engine {
     this.env = env
     this.post({ type: 'configure', sensor, env })
     if (this.views && this.state.source === 'simulator') {
-      this.views.cloud.setMaxRange(sensor.maxRange)
-      this.views.cloud.setBeam(sensor.fovUp, sensor.fovDown)
+      this.views.cloud?.setMaxRange(sensor.maxRange)
+      this.views.cloud?.setBeam(sensor.fovUp, sensor.fovDown)
       this.views.range.setChannels(sensor.channels)
       this.views.range.setMaxRange(sensor.maxRange)
       this.views.range.setBeam(sensor.fovUp, sensor.fovDown)
@@ -449,18 +510,19 @@ export class Engine {
   }
 
   setRunning(running: boolean): void {
+    if (running && !this.state.running) this.cues.play('scan')
     if (this.state.source === 'simulator') this.post({ type: 'run', running })
     if (this.state.source === 'recording') {
       if (running) this.playReplay()
       else clearTimeout(this.replayTimer)
     }
-    this.views?.cloud.setRunning(running)
+    this.views?.cloud?.setRunning(running)
     this.emit({ running })
   }
 
   restartSimulation(): void {
     this.t0 = null
-    this.views?.cloud.clear()
+    this.views?.cloud?.clear()
     this.closeTracks()
     this.post({ type: 'restart' })
     this.emit({ tracks: [] })
@@ -468,25 +530,26 @@ export class Engine {
 
   useSimulator(): void {
     this.leaveSource()
-    this.views?.cloud.clear()
+    this.views?.cloud?.clear()
     this.configure(this.sensor, this.env)
-    this.post({ type: 'resetTracks' })
+    this.post({ type: 'resetTracks', epoch: this.sourceRun })
     this.post({ type: 'run', running: true })
-    this.views?.cloud.setOutline(this.outline)
-    this.views?.cloud.setRunning(true)
-    this.views?.cloud.setMaxRange(this.sensor.maxRange)
-    this.views?.cloud.setBeam(this.sensor.fovUp, this.sensor.fovDown)
+    this.views?.cloud?.setOutline(this.outline)
+    this.views?.cloud?.setRunning(true)
+    this.views?.cloud?.setMaxRange(this.sensor.maxRange)
+    this.views?.cloud?.setBeam(this.sensor.fovUp, this.sensor.fovDown)
     this.views?.range.setChannels(this.sensor.channels)
     this.views?.range.setMaxRange(this.sensor.maxRange)
     this.views?.range.setBeam(this.sensor.fovUp, this.sensor.fovDown)
-    this.emit({ source: 'simulator', running: true, tracks: [], accumulating: false })
+    this.emit({ source: 'simulator', running: true, tracks: [], accumulating: false, stats: { ...this.state.stats, simulated: true } })
+    this.cues.play('scan')
   }
 
   connectBridge(url: string): void {
     this.leaveSource()
-    this.views?.cloud.clear()
-    this.views?.cloud.setOutline(null)
-    this.post({ type: 'resetTracks' })
+    this.views?.cloud?.clear()
+    this.views?.cloud?.setOutline(null)
+    this.post({ type: 'resetTracks', epoch: this.sourceRun })
     this.emit({ source: 'bridge', running: true, bridge: 'connecting', bridgeMessage: url, tracks: [] })
     let socket: WebSocket
     try {
@@ -497,15 +560,17 @@ export class Engine {
     }
     socket.binaryType = 'arraybuffer'
     this.socket = socket
-    socket.onopen = () => this.emit({ bridge: 'open', bridgeMessage: url })
-    socket.onerror = () => this.emit({ bridge: 'error', bridgeMessage: `No bridge answered at ${url}` })
+    socket.onopen = () => { if (this.socket !== socket) return; this.emit({ bridge: 'open', bridgeMessage: 'Connected. Waiting for sensor frames.' }); this.cues.play('connect') }
+    socket.onerror = () => { if (this.socket !== socket) return; this.emit({ bridge: 'error', bridgeMessage: `No bridge answered at ${url}` }) }
     socket.onclose = () => {
       if (this.socket === socket && this.state.bridge !== 'error') {
-        this.emit({ bridge: 'closed', bridgeMessage: `${url} closed the connection` })
+        this.invalidateLiveTracks()
+        this.cues.play('disconnect')
+        this.emit({ bridge: 'closed', bridgeMessage: 'Connection lost. Check the bridge and reconnect.', tracks: [] })
       }
     }
     socket.onmessage = (e) => {
-      if (!(e.data instanceof ArrayBuffer) || !this.state.running) return
+      if (this.socket !== socket || !(e.data instanceof ArrayBuffer) || !this.state.running) return
       try {
         this.ingest(e.data, null, 0, true)
       } catch (err) {
@@ -516,6 +581,10 @@ export class Engine {
   }
 
   private leaveSource(): void {
+    this.sourceRun++
+    this.state.sourceRun = this.sourceRun
+    this.post({ type: 'resetTracks', epoch: this.sourceRun })
+    this.state.proximity = { ...this.state.proximity, ids: [], acknowledged: false }
     this.closeTracks()
     if (this.state.source === 'scan') this.phone.end()
     if (this.state.accumulating) this.emit({ accumulating: false })
@@ -529,6 +598,9 @@ export class Engine {
     this.revCount = 0
     this.t0 = null
     this.seen = { channels: 0, range: 0 }
+    this.lastFrameAt = 0
+    this.window = { start: performance.now(), points: 0, rays: 0, revs: 0 }
+    this.emit({ stats: { ...this.state.stats, receivedFrames: 0, lastFrameAge: -1, pointsPerSecond: 0, revolutionsPerSecond: 0, pointsHeld: 0, time: 0, frameId: 0, seenChannels: 0, seenRange: 0, simulated: false } })
     if (this.state.replay) this.emit({ replay: null })
     if (this.state.bridge !== 'idle') this.emit({ bridge: 'idle', bridgeMessage: '' })
   }
@@ -539,7 +611,7 @@ export class Engine {
     this.rec = []
     this.recBytes = 0
     this.recStart = this.state.stats.time
-    this.emit({ recording: true, recordedFrames: 0, recordedSeconds: 0 })
+    this.emit({ recording: true, recordedFrames: 0, recordedSeconds: 0, recordingNotice: '' })
   }
 
   startRecordingCue(): void {
@@ -575,6 +647,7 @@ export class Engine {
   }
 
   async openRecording(file: File): Promise<string | null> {
+    if (file.size > MAX_RECORDED_BYTES + 4_000_000) return 'Recording exceeds the 400 MB memory limit.'
     const buf = await file.arrayBuffer()
     const frames: ArrayBuffer[] = []
     const dv = new DataView(buf)
@@ -592,11 +665,12 @@ export class Engine {
       frames.push(f)
       o += n
     }
+    if (o !== buf.byteLength) return `${file.name} has an incomplete frame length at the end`
     if (!frames.length) return `${file.name} holds no frames`
     this.leaveSource()
-    this.views?.cloud.clear()
-    this.views?.cloud.setOutline(null)
-    this.post({ type: 'resetTracks' })
+    this.views?.cloud?.clear()
+    this.views?.cloud?.setOutline(null)
+    this.post({ type: 'resetTracks', epoch: this.sourceRun })
     this.replayFrames = frames
     this.emit({ source: 'recording', running: true, tracks: [], replay: { frames: frames.length, index: 0, name: file.name } })
     this.playReplay()
@@ -605,8 +679,8 @@ export class Engine {
 
   seekReplay(index: number): void {
     if (!this.state.replay) return
-    this.views?.cloud.clear()
-    this.post({ type: 'resetTracks' })
+    this.views?.cloud?.clear()
+    this.post({ type: 'resetTracks', epoch: this.sourceRun })
     this.revCount = 0
     this.emit({ replay: { ...this.state.replay, index }, tracks: [] })
     if (this.state.running) this.playReplay()
@@ -634,8 +708,8 @@ export class Engine {
         // Loop after a short pause, starting clean.
         this.state = { ...this.state, replay: { ...r, index: 0 } }
         this.replayTimer = window.setTimeout(() => {
-          this.views?.cloud.clear()
-          this.post({ type: 'resetTracks' })
+          this.views?.cloud?.clear()
+          this.post({ type: 'resetTracks', epoch: this.sourceRun })
           this.revCount = 0
           this.t0 = null
           this.playReplay()
@@ -653,12 +727,18 @@ export class Engine {
   private onWorker(m: FromWorker): void {
     if (m.type === 'outline') {
       this.outline = m.boxes
-      if (this.state.source === 'simulator') this.views?.cloud.setOutline(m.boxes)
+      if (this.state.source === 'simulator') this.views?.cloud?.setOutline(m.boxes)
     } else if (m.type === 'packet') {
       if (this.state.source === 'simulator') this.ingest(m.frame, m.truth, m.rays, false)
     } else if (m.type === 'tracks') {
+      if (m.epoch !== this.sourceRun || !this.state.running || (this.state.source === 'bridge' && (this.state.bridge !== 'open' || performance.now() - this.lastFrameAt > 2500))) return
+      const proximity = this.state.proximity
+      const ids = proximity.enabled ? nearbyTracks(m.tracks, { x: m.x, y: m.y }, proximity.radius) : []
+      const entered = ids.length > 0 && proximity.ids.length === 0
+      if (entered) this.cues.play('alert')
+      this.state.proximity = { ...proximity, ids, acknowledged: ids.length ? (entered ? false : proximity.acknowledged) : false }
       this.updateTrackExhibits(m.tracks)
-      this.views?.cloud.setTracks(m.tracks, m.time)
+      this.views?.cloud?.setTracks(m.tracks, m.time)
       this.views?.range.setContacts(m.tracks, (id) => this.trackExhibit.get(id)?.n)
       this.emit({ tracks: m.tracks, ego: { x: m.x, y: m.y }, stats: { ...this.state.stats, perceptionMs: m.ms } })
     }
@@ -666,15 +746,17 @@ export class Engine {
 
   private ingest(buffer: ArrayBuffer, truth: Uint8Array | null, rays: number, external: boolean): void {
     const f: Frame = decodeFrame(buffer)
+    this.lastFrameAt = performance.now()
+    this.state.stats.receivedFrames++
     if (this.state.recording) {
       if (this.recBytes + buffer.byteLength > MAX_RECORDED_BYTES) {
-        this.emit({ recording: false })
+        if (!this.state.recordingNotice) this.emit({ recordingNotice: 'Capture limit reached (400 MB). Stop and seal to save the frames already captured.' })
       } else {
         this.rec.push(buffer.slice(0))
         this.recBytes += buffer.byteLength
       }
     }
-    this.views?.cloud.push(f, truth)
+    this.views?.cloud?.push(f, truth)
     this.views?.range.push(f)
     this.window.points += f.pointCount
     this.window.rays += rays
@@ -704,7 +786,7 @@ export class Engine {
     this.seen.range = r2
     const range = Math.max(2, Math.ceil(Math.sqrt(r2)))
     if (range !== this.state.stats.seenRange) {
-      this.views?.cloud.setMaxRange(range)
+      this.views?.cloud?.setMaxRange(range)
       this.views?.range.setMaxRange(range)
       this.views?.range.setChannels(64)
       this.state.stats.seenRange = range
@@ -727,11 +809,11 @@ export class Engine {
     }
     if (f.flags & FLAG_REVOLUTION_END) {
       // Fit the views to what the device actually delivers.
-      const range = Math.max(10, Math.ceil(Math.sqrt(seen.range) / 10) * 10)
+      const range = Math.min(250, Math.max(10, Math.ceil(Math.sqrt(seen.range) / 10) * 10))
       if (this.views && (seen.channels !== this.state.stats.seenChannels || range !== this.state.stats.seenRange)) {
         this.views.range.setChannels(Math.max(1, seen.channels))
         this.views.range.setMaxRange(range)
-        this.views.cloud.setMaxRange(range)
+        this.views.cloud?.setMaxRange(range)
       }
       this.state.stats.seenChannels = seen.channels
       this.state.stats.seenRange = range
@@ -746,14 +828,20 @@ export class Engine {
 
   private tickStats(): void {
     const now = performance.now()
-    const dt = (now - this.window.start) / 1000
+    const dt = Math.max(0.001, (now - this.window.start) / 1000)
+    if (this.state.source === 'bridge' && this.state.running && this.lastFrameAt && now - this.lastFrameAt > 2500) this.invalidateLiveTracks()
+    if (this.state.wifi.mode !== 'off' && now - this.lastCsiAt > 2500 && this.wifiEpisode?.open) {
+      this.wifiEpisode.open = false
+      this.wifiEpisode.end = clock()
+    }
     const w = this.window
     const stats: Stats = {
       ...this.state.stats,
+      lastFrameAge: this.lastFrameAt ? (now - this.lastFrameAt) / 1000 : -1,
       pointsPerSecond: w.points / dt,
       returnRate: w.rays > 0 ? w.points / w.rays : this.state.stats.returnRate,
       revolutionsPerSecond: w.revs / dt,
-      pointsHeld: this.views?.cloud.pointsHeld ?? 0,
+      pointsHeld: this.views?.cloud?.pointsHeld ?? 0,
     }
     this.window = { start: now, points: 0, rays: 0, revs: 0 }
     const patch: Partial<EngineState> = {
@@ -761,7 +849,7 @@ export class Engine {
       exhibits: [...this.register],
       wifi: {
         ...this.state.wifi,
-        index: this.motion.index, score: this.motion.score, moving: this.motion.moving,
+        index: this.motion.index, score: this.motion.score, moving: now - this.lastCsiAt < 2500 && this.motion.moving,
         packetsPerSecond: this.wifiPackets / dt,
       },
     }

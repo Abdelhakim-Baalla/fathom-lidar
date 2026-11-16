@@ -1,7 +1,7 @@
-@import '@fontsource-variable/sofia-sans/wght.css';
-@import '@fontsource/sofia-sans-extra-condensed/700.css';
-@import '@fontsource/sofia-sans-extra-condensed/800.css';
-@import '@fontsource-variable/jetbrains-mono/wght.css';
+
+@import '@fontsource/sofia-sans-extra-condensed/latin-700.css';
+@import '@fontsource/sofia-sans-extra-condensed/latin-800.css';
+
 
 /*
   Chain of Custody. Gunmetal locker greys for the shell, label stock for ink,
@@ -15,16 +15,16 @@
   --raise: #1f2529;
   --raise-2: #283035;
   --line: #262d32;
-  --ink: #ebe5d6;
+  --ink: #f4f4f5;
   --ink-2: #b3ad9f;
   --ink-3: #8b877e;
-  --exhibit: #f2c230;
+  --exhibit: #f48142;
   --exhibit-ink: #14110a;
-  --exhibit-wash: rgb(242 194 48 / 0.12);
+  --exhibit-wash: rgb(244 129 66 / 0.12);
   --seal: #e0332f;
   --radio: #5b86ff;
   --warn: #f0a24a;
-  --focus: #f2c230;
+  --focus: #f48142;
   --u: 8px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   --sans: 'Sofia Sans Variable', system-ui, sans-serif;
@@ -188,7 +188,7 @@ option:disabled { color: var(--ink-3); }
 .btn:active { transform: scale(0.97); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 .btn--primary { background: var(--exhibit); color: var(--exhibit-ink); }
-.btn--primary:hover { background: #ffd451; }
+.btn--primary:hover { background: #ff9b64; }
 .btn--rec { background: var(--seal); color: #fff; }
 .btn--rec:hover { background: #f04440; }
 .btn--quiet { background: transparent; color: var(--ink-2); }
@@ -335,7 +335,7 @@ input[type='range']:active::-webkit-slider-thumb { transform: scale(1.25); }
 .empty__title { font: 800 22px/1.1 var(--cond); color: var(--ink); }
 .xr-overlay { display: none; }
 /* WebXR shows this element over the camera feed during a scan. */
-.xr-overlay:xr-overlay {
+.xr-overlay.is-xr-active {
   display: grid;
   align-content: end;
   justify-items: start;
@@ -474,3 +474,15 @@ tr.is-sealed .tag { animation: stamp 280ms var(--ease); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+
+@font-face { font-family: 'Sofia Sans Variable'; font-style: normal; font-display: swap; font-weight: 1 1000; src: url('@fontsource-variable/sofia-sans/files/sofia-sans-latin-wght-normal.woff2') format('woff2'); }
+
+@font-face { font-family: 'JetBrains Mono Variable'; font-style: normal; font-display: swap; font-weight: 100 800; src: url('@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2'); }
+
+/* Keep the instruments usable when the browser cannot provide a GPU context. */
+.cloud-unavailable { position: absolute; inset: 112px 0 48px; z-index: 2; display: flex; flex-direction: column; justify-content: safe center; align-items: flex-start; gap: 16px; padding: 24px clamp(20px, 4vw, 64px); background: #090b0c; overflow: auto; }
+.cloud-unavailable h2 { margin: 0; font: 600 clamp(22px, 3vw, 34px)/1.15 var(--sans); }
+.cloud-unavailable p { margin: 0; max-width: 52ch; color: var(--ink-2); line-height: 1.6; }
+.cloud-unavailable .btn { flex-shrink: 0; }
+.seg--float:disabled { opacity: 0.45; }

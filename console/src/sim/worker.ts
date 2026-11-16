@@ -11,12 +11,12 @@ export type ToWorker =
   | { type: 'restart' }
   /** one revolution from another source (bridge, recording) to detect and track */
   | { type: 'perceive'; points: Float32Array; count: number; x: number; y: number; time: number; range: number }
-  | { type: 'resetTracks' }
+  | { type: 'resetTracks'; epoch: number }
 
 export type FromWorker =
   | { type: 'outline'; boxes: Float32Array }
   | { type: 'packet'; frame: ArrayBuffer; truth: Uint8Array; rays: number }
-  | { type: 'tracks'; tracks: Track[]; time: number; ms: number; x: number; y: number }
+  | { type: 'tracks'; epoch: number; tracks: Track[]; time: number; ms: number; x: number; y: number }
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope
 const post = (m: FromWorker, transfer: Transferable[] = []) => ctx.postMessage(m, transfer)
@@ -25,6 +25,7 @@ let sensor: SensorConfig = PRESETS[1].config
 let env: Environment = DEFAULT_ENVIRONMENT
 let sim = new Simulator(sensor, env)
 const tracker = new Tracker()
+let epoch = 0
 let running = false
 let last = performance.now()
 
@@ -39,7 +40,7 @@ function sendOutline(): void {
 function perceive(points: Float32Array, count: number, x: number, y: number, time: number, range: number): void {
   const t0 = performance.now()
   const tracks = tracker.update(detect(points, count, x, y, range), time)
-  post({ type: 'tracks', tracks, time, ms: performance.now() - t0, x, y })
+  post({ type: 'tracks', epoch, tracks, time, ms: performance.now() - t0, x, y })
 }
 
 function tick(): void {
@@ -73,6 +74,7 @@ ctx.onmessage = (e: MessageEvent<ToWorker>) => {
   } else if (m.type === 'perceive') {
     perceive(m.points, m.count, m.x, m.y, m.time, m.range)
   } else if (m.type === 'resetTracks') {
+    epoch = m.epoch
     tracker.reset()
   }
 }

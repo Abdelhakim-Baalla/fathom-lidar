@@ -19,10 +19,10 @@ const STOPS: Array<[number, number, number]> = [
   [18, 28, 34],
 ]
 const BACKGROUND: [number, number, number] = [7, 10, 12]
-const INK = '#ebe5d6'
+const INK = '#f4f4f5'
 const DIM = '#798287'
 const FAINT = '#3a4247'
-const EXHIBIT = '#f2c230'
+const EXHIBIT = '#f48142'
 
 /**
  * The sensor's own view: one row per channel, one column per bearing, shaded by
@@ -311,11 +311,11 @@ export class RangeImage {
     // moves the cursor from right to left in this bearing map.
     const sx = (0.5 - this.sweepAz / TWO_PI) * W
     const trail = this.ctx.createLinearGradient(sx, 0, sx + 30, 0)
-    trail.addColorStop(0, 'rgba(242,194,48,0.11)')
-    trail.addColorStop(1, 'rgba(242,194,48,0)')
+    trail.addColorStop(0, 'rgba(244,129,66,0.11)')
+    trail.addColorStop(1, 'rgba(244,129,66,0)')
     this.ctx.fillStyle = trail
     this.ctx.fillRect(sx, 0, 30, imgH)
-    this.ctx.fillStyle = 'rgba(242,194,48,0.5)'
+    this.ctx.fillStyle = 'rgba(244,129,66,0.5)'
     this.ctx.fillRect(sx, 0, 1, imgH)
     this.ctx.fillStyle = EXHIBIT
     this.ctx.beginPath()
@@ -392,7 +392,7 @@ export class RangeImage {
         const edist = Math.hypot(hx - this.ego.x, hy - this.ego.y)
         const ey = Math.min(imgH - 3, Math.max(3, elevY((Math.atan2(t.z - this.ego.z, edist) * 180) / Math.PI)))
         if (Math.abs(ex - x) < W / 2 && Math.abs(ex - x) > 3) {
-          this.ctx.strokeStyle = 'rgba(242,194,48,0.5)'
+          this.ctx.strokeStyle = 'rgba(244,129,66,0.5)'
           this.ctx.lineWidth = 1
           this.ctx.setLineDash([3, 3])
           this.ctx.beginPath()
@@ -446,7 +446,7 @@ export class RangeImage {
       const ax = bx > x ? x + s : x - s
       const ay = by + 6.5
       if (Math.abs(ay - y) > 3 || bx < x - s) {
-        this.ctx.strokeStyle = 'rgba(242,194,48,0.55)'
+        this.ctx.strokeStyle = 'rgba(244,129,66,0.55)'
         this.ctx.beginPath()
         this.ctx.moveTo(ax, y)
         this.ctx.lineTo(bx > x ? bx - 1 : bx + boxW + 1, ay)

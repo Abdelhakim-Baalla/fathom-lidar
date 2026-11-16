@@ -175,6 +175,22 @@ bridge/    Python: VLP-16 parser, packet sources, ESP32 CSI reader, relay, WebSo
 
 ## Status
 
+### Identity, intro and audio
+
+The original Fathom mark and favicon use signal orange, white and graphite. The 6.4-second HUD introduction is skippable, appears once per tab session, and respects reduced-motion preferences. Reopen it from **Audio → Replay intro**. Audio starts only after an explicit gesture.
+
+The scanner and radar samples are CC0 assets; attribution and exact source URLs are in [the audio manifest](console/public/audio/LICENSES.md). The warning is an original RWR-inspired cue tied to the proximity rule. Mute, skip and acknowledgement cancel scheduled playback. Scan cues play when starting or resuming a scan, rather than looping continuously.
+
+**Audio → Use your own audio** accepts a local WAV, MP3, OGG or other browser-decodable file for the intro, scan or warning. Files stay in memory for that session. The intro uses the first 6.4 seconds; trim the passage you want before importing. The exact Blake Sanchez reference soundtrack is sold by its creator and is not bundled. The implemented visuals are reference-inspired, not a frame-for-frame copy of the supplied videos.
+
+### Search and publishing
+
+`cd console && bun run build` generates four static field guides and the six-page sitemap, checks TypeScript, builds the console, then validates the published HTML's metadata, structured data, local links and images. For GitHub Pages use `FATHOM_BASE=/fathom-lidar/ bun run build`. Canonical URLs use the repository's existing `https://abdelhakim-baalla.github.io/fathom-lidar/` address; update those and `scripts/seo.mjs` when moving domains.
+
+The guides render without JavaScript and are linked from About. The console retains concise controls, canonical metadata, a WebApplication graph and social preview assets. Indexing and search placement depend on publication and the search engines; no ranking is guaranteed. GitHub Pages project-level `robots.txt` is packaged for portability, but crawlers read robots rules at the domain root. Submit the sitemap directly in Search Console when deploying.
+
+### Hardware validation
+
 The LiDAR drive and the Wi-Fi room are simulated, and the console labels them so. The microphone path and the phone scan use real input. No field measurements or benchmarks against physical sensors exist yet.
 
 Neither the phone scan nor the ESP32 path has been run on real hardware:
