@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .impeccable/mocks/
 .impeccable/review/
+.impeccable/iteration/
 .impeccable/decision.json
 .impeccable/build/
 __pycache__/

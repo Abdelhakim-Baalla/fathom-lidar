@@ -93,14 +93,19 @@ export class Timeline {
       ctx.textBaseline = 'middle'
       ctx.fillText(lane.label, 0, y + laneH / 2)
       const colour = lane.kind === 'object' ? p.exhibit : lane.kind === 'wifi' ? p.radio : lane.kind === 'sound' ? p.sound : p.seal
+      // Objects overlap in time, so they pack into rows: each bar takes the first row free at its start.
+      const rows = lane.kind === 'object' ? 3 : 1
+      const rowEnd = new Array<number>(rows).fill(-Infinity)
+      const rowH = Math.floor((laneH - 6) / rows)
       for (const e of items) {
         if (e.kind !== lane.kind || e.end < now - WINDOW_S) continue
         const x0 = Math.max(LABEL_W, x(e.start))
-        const x1 = Math.max(x0 + 3, x(e.open ? now : e.end))
-        const bh = lane.kind === 'object' ? 6 : laneH - 10
-        // Objects stack in thin rows so overlapping tracks stay apart.
-        const row = lane.kind === 'object' ? (e.n % Math.max(1, Math.floor((laneH - 6) / 8))) : 0
-        const by = lane.kind === 'object' ? y + 3 + row * 8 : y + 4
+        const x1 = Math.max(x0 + 4, x(e.open ? now : e.end))
+        let row = rowEnd.findIndex((end) => end < x0 - 2)
+        if (row < 0) row = rowEnd.indexOf(Math.min(...rowEnd))
+        rowEnd[row] = Math.max(rowEnd[row], x1)
+        const bh = rows > 1 ? rowH - 2 : laneH - 10
+        const by = rows > 1 ? y + 3 + row * rowH : y + 4
         ctx.fillStyle = inverted ? p.ground : colour
         ctx.globalAlpha = this.selected === null || this.selected === e.n ? 1 : 0.55
         ctx.fillRect(x0, by, x1 - x0, bh)
@@ -110,9 +115,9 @@ export class Timeline {
           ctx.strokeRect(x0 - 2, by - 2, x1 - x0 + 4, bh + 4)
         }
         ctx.globalAlpha = 1
-        if (lane.kind !== 'object' && x1 - x0 > 22) {
+        if (x1 - x0 > 22 && bh >= 9) {
           ctx.fillStyle = lane.kind === 'wifi' || lane.kind === 'recording' ? p.ink : p.ground
-          ctx.font = NUM_FONT
+          ctx.font = bh < 12 ? '700 10px "Sofia Sans Extra Condensed", system-ui, sans-serif' : NUM_FONT
           ctx.fillText(String(e.n), x0 + 4, by + bh / 2 + 1)
         }
         this.hits.push({ x0, x1, y0: y, y1: y + laneH, n: e.n })

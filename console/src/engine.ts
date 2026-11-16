@@ -106,7 +106,7 @@ export class Engine {
   private relay: WebSocket | null = null
   private listeners = new Set<() => void>()
   private socket: WebSocket | null = null
-  private sensor: SensorConfig = PRESETS[1].config
+  private sensor: SensorConfig = PRESETS[2].config
   private env: Environment
   private outline: Float32Array | null = null
 
@@ -205,8 +205,10 @@ export class Engine {
     cloud.exhibitOf = (id) => this.exhibitOfTrack(id)
     cloud.setOutline(this.outline)
     cloud.setMaxRange(this.sensor.maxRange)
+    cloud.setBeam(this.sensor.fovUp, this.sensor.fovDown)
     range.setChannels(this.sensor.channels)
     range.setMaxRange(this.sensor.maxRange)
+    range.setBeam(this.sensor.fovUp, this.sensor.fovDown)
   }
 
   detach(): void {
@@ -439,8 +441,10 @@ export class Engine {
     this.post({ type: 'configure', sensor, env })
     if (this.views && this.state.source === 'simulator') {
       this.views.cloud.setMaxRange(sensor.maxRange)
+      this.views.cloud.setBeam(sensor.fovUp, sensor.fovDown)
       this.views.range.setChannels(sensor.channels)
       this.views.range.setMaxRange(sensor.maxRange)
+      this.views.range.setBeam(sensor.fovUp, sensor.fovDown)
     }
   }
 
@@ -471,8 +475,10 @@ export class Engine {
     this.views?.cloud.setOutline(this.outline)
     this.views?.cloud.setRunning(true)
     this.views?.cloud.setMaxRange(this.sensor.maxRange)
+    this.views?.cloud.setBeam(this.sensor.fovUp, this.sensor.fovDown)
     this.views?.range.setChannels(this.sensor.channels)
     this.views?.range.setMaxRange(this.sensor.maxRange)
+    this.views?.range.setBeam(this.sensor.fovUp, this.sensor.fovDown)
     this.emit({ source: 'simulator', running: true, tracks: [], accumulating: false })
   }
 
@@ -653,6 +659,7 @@ export class Engine {
     } else if (m.type === 'tracks') {
       this.updateTrackExhibits(m.tracks)
       this.views?.cloud.setTracks(m.tracks, m.time)
+      this.views?.range.setContacts(m.tracks, (id) => this.trackExhibit.get(id)?.n)
       this.emit({ tracks: m.tracks, ego: { x: m.x, y: m.y }, stats: { ...this.state.stats, perceptionMs: m.ms } })
     }
   }

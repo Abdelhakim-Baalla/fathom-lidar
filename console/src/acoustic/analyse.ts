@@ -30,6 +30,8 @@ export interface SoundEvent {
   bearing: number | null
   /** impulses merged into one footstep exhibit */
   count: number
+  /** how far the peak rose above the noise floor, dB: the detection's margin */
+  overFloorDb: number
 }
 
 export interface Block {
@@ -116,7 +118,7 @@ export class SoundAnalyser {
         this.event = {
           id: this.nextId++, start: b.t, end: b.t, open: true, cls: 'Sustained sound',
           peakDb: db, centroidHz: centroid, flatness, voicedShare: 0, pitchHz: null,
-          bearing: this.bearing(b), count: 1,
+          bearing: this.bearing(b), count: 1, overFloorDb: db - this.floorDb,
           cSum: 0, fSum: 0, voiced: 0, ticks: 0, pSum: 0,
         }
         this.quiet = 0
@@ -126,6 +128,7 @@ export class SoundAnalyser {
     if (e) {
       e.end = b.t
       e.peakDb = Math.max(e.peakDb, db)
+      e.overFloorDb = Math.max(e.overFloorDb, db - this.floorDb)
       e.ticks++
       e.cSum += centroid
       e.fSum += flatness
@@ -148,7 +151,7 @@ export class SoundAnalyser {
     const out: SoundEvent = {
       id: e.id, start: e.start, end: e.end, open: false, cls: e.cls, peakDb: e.peakDb,
       centroidHz: e.centroidHz, flatness: e.flatness, voicedShare: e.voicedShare,
-      pitchHz: e.pitchHz, bearing: e.bearing, count: 1,
+      pitchHz: e.pitchHz, bearing: e.bearing, count: 1, overFloorDb: e.overFloorDb,
     }
     // Footsteps: low impulses in a walking rhythm merge into one event.
     if (out.cls === 'Thud' || out.cls === 'Clap or knock') {

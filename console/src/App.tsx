@@ -76,12 +76,12 @@ export default function App() {
     setFeedState(f)
     history.replaceState(null, '', f === 'lidar' ? location.pathname + location.search : `#${f}`)
   }
-  const [presetId, setPresetId] = useState('c32')
-  const [sensor, setSensor] = useState<SensorConfig>(PRESETS[1].config)
+  const [presetId, setPresetId] = useState('c64')
+  const [sensor, setSensor] = useState<SensorConfig>(PRESETS[2].config)
   const [env, setEnv] = useState<Environment>(DEFAULT_ENVIRONMENT)
   const [mode, setMode] = useState<ColorMode>('range')
-  const [pointSize, setPointSize] = useState(2.2)
-  const [held, setHeld] = useState(1)
+  const [pointSize, setPointSize] = useState(2.6)
+  const [held, setHeld] = useState(8)
   const [layers, setLayers] = useState<Layers>({ rings: true, tracks: true, sweep: true, outline: false })
   const [camera, setCamera] = useState<CameraPreset>('chase')
   const [selected, setSelected] = useState<number | null>(null)
@@ -427,6 +427,12 @@ export default function App() {
             </section>
             <section>
               <h2>Detector</h2>
+              <dl className="facts">
+                <div><dt>Level</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.levelDb)} dBFS` : '—'}</dd></div>
+                <div><dt>Noise floor</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.floorDb)} dBFS` : '—'}</dd></div>
+                <div><dt>Opens at</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.floorDb + 12)} dBFS` : 'floor + 12 dB'}</dd></div>
+                <div><dt>Events logged</dt><dd>{counts.sound}</dd></div>
+              </dl>
               <p className="note">An event opens 12 dB above the room's noise floor when the spectrum changes. Classes come from duration, brightness and pitch, so each is a likely reading. Levels are dBFS, relative to the converter, not sound pressure. Bearings are left or right of the microphone pair; front and back look the same to two microphones.</p>
               <p className="note">Interface sounds mute the detector while they play.</p>
             </section>
@@ -517,7 +523,7 @@ export default function App() {
         <figure className="instrument">
           <figcaption className="sr">{feed === 'lidar' ? 'Range image' : feed === 'wifi' ? 'Wi-Fi channel state' : 'Microphone spectrum'}</figcaption>
           <div className="instrument__pane" hidden={feed !== 'lidar'}>
-            <span className="instrument__label">Range image · {sim ? sensor.channels : s.stats.seenChannels || '–'} rows × 360°</span>
+            <span className="instrument__label">Range image · {sim ? sensor.channels : s.stats.seenChannels || '–'} rows × 360° · {sim ? `${sensor.rateHz} Hz` : 'live'}</span>
             <canvas ref={rangeCanvas} className="rangeimg" aria-label="Range image: one row per channel, one column per bearing" />
           </div>
           <div className="instrument__pane" hidden={feed !== 'wifi'}>
@@ -563,7 +569,7 @@ function exhibitText(e: Exhibit, s: EngineState): { title: string; measure: stri
     const name = CLASS_NAMES[t?.cls ?? e.cls ?? 0]
     if (!t || !e.open) return { title: name, measure: 'left the scan' }
     const range = Math.hypot(t.x - s.ego.x, t.y - s.ego.y), speed = Math.hypot(t.vx, t.vy)
-    return { title: name, measure: `${fmt1.format(range)} m · ${speed < 0.5 ? 'still' : `${Math.round(speed * 3.6)} km/h`}` }
+    return { title: name, measure: `${fmt1.format(range)} m · ${speed < 0.5 ? 'still' : `${Math.round(speed * 3.6)} km/h`} · ${fmt.format(t.points)} pts` }
   }
   if (e.kind === 'wifi') {
     return { title: 'Motion near the link', measure: `× ${fmt1.format(e.wifi?.peak ?? 0)} peak · ${fmt1.format(e.end - e.start)} s` }
@@ -572,7 +578,7 @@ function exhibitText(e: Exhibit, s: EngineState): { title: string; measure: stri
     const b = e.sound.bearing
     return {
       title: `${e.sound.cls}${e.sound.cls === 'Footsteps' ? ` × ${e.sound.count}` : ''}`,
-      measure: `${Math.round(e.sound.peakDb)} dBFS${b === null ? '' : ` · ${bearingText(b)}`}`,
+      measure: `+${Math.round(e.sound.overFloorDb)} dB over floor${b === null ? '' : ` · ${bearingText(b)}`}`,
     }
   }
   return { title: 'Sealed recording', measure: `sha256 ${e.seal?.sha256.slice(0, 12) ?? ''}…` }
@@ -704,6 +710,7 @@ function Detail({ exhibit, track, ego, onClose }: {
         <dl>
           {when}
           <div><dt>Peak level</dt><dd>{fmt1.format(e.peakDb)} dBFS</dd></div>
+          <div><dt>Over the noise floor</dt><dd>+{fmt1.format(e.overFloorDb)} dB</dd></div>
           <div><dt>Brightness</dt><dd>{fmt.format(Math.round(e.centroidHz))} Hz centroid</dd></div>
           <div><dt>Pitch</dt><dd>{e.pitchHz ? `${Math.round(e.pitchHz)} Hz, ${Math.round(e.voicedShare * 100)} % voiced` : 'none'}</dd></div>
           <div><dt>Bearing</dt><dd>{e.bearing === null ? 'mono input or unclear' : bearingText(e.bearing)}</dd></div>
