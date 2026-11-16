@@ -112,7 +112,7 @@ const VIGNETTE = {
 export type CameraPreset = 'chase' | 'plan' | 'side'
 
 const PRESET_GOALS: Record<CameraPreset, { theta: number; phi: number; dist: number; headingUp: boolean; ahead: number }> = {
-  chase: { theta: 0, phi: 0.98, dist: 47, headingUp: true, ahead: 15 },
+  chase: { theta: 0.45, phi: 0.92, dist: 45, headingUp: true, ahead: 13 },
   plan: { theta: 0, phi: 0.06, dist: 138, headingUp: false, ahead: 0 },
   side: { theta: 1.32, phi: 1.14, dist: 54, headingUp: true, ahead: 6 },
 }
