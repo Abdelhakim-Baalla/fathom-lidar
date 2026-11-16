@@ -38,32 +38,34 @@ export interface Prim {
   specular: boolean
   /** bounding radius in the ground plane, for culling */
   br: number
+  /** facade relief: 0 plain, 1 punched windows, 2 curtain wall, 3 shopfront */
+  detail: number
 }
 
 function box(
   cx: number, cy: number, cz: number,
   lx: number, ly: number, lz: number,
-  yaw: number, refl: number, cls: number, specular = false,
+  yaw: number, refl: number, cls: number, specular = false, detail = 0,
 ): Prim {
   const hx = lx / 2, hy = ly / 2
   return {
     kind: BOX, cx, cy, cz, hx, hy, hz: lz / 2,
     cos: Math.cos(yaw), sin: Math.sin(yaw),
-    refl, cls, porosity: 0, specular, br: Math.hypot(hx, hy),
+    refl, cls, porosity: 0, specular, br: Math.hypot(hx, hy), detail,
   }
 }
 
 function cylinder(cx: number, cy: number, z0: number, z1: number, r: number, refl: number, cls: number): Prim {
   return {
     kind: CYLINDER, cx, cy, cz: (z0 + z1) / 2, hx: r, hy: r, hz: (z1 - z0) / 2,
-    cos: 1, sin: 0, refl, cls, porosity: 0, specular: false, br: r,
+    cos: 1, sin: 0, refl, cls, porosity: 0, specular: false, br: r, detail: 0,
   }
 }
 
 function sphere(cx: number, cy: number, cz: number, r: number, refl: number, cls: number, porosity: number): Prim {
   return {
     kind: SPHERE, cx, cy, cz, hx: r, hy: r, hz: r,
-    cos: 1, sin: 0, refl, cls, porosity, specular: false, br: r,
+    cos: 1, sin: 0, refl, cls, porosity, specular: false, br: r, detail: 0,
   }
 }
 
@@ -81,6 +83,12 @@ function nearestRoad(v: number): number {
   return k * PITCH
 }
 
+/** Deterministic 0..1 noise for surface texture; cheap enough for every return. */
+function hash2(x: number, y: number): number {
+  const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453
+  return n - Math.floor(n)
+}
+
 /** Ground reflectivity at a point: asphalt, paint, concrete, grass. */
 export function groundReflectivity(x: number, y: number): number {
   const rx = nearestRoad(x), ry = nearestRoad(y)
@@ -93,16 +101,45 @@ export function groundReflectivity(x: number, y: number): number {
     const along = onX ? dy : dx
     const acrossPos = onX ? x : y
     if (across < 0.09) return 0.72 // centre line
-    if (across > 6.75 && across < 6.9) return 0.68 // edge line
+    if (across > 6.72 && across < 6.9) return 0.66 // edge line
     if (along > 9.5 && along < 12.5) {
       // zebra crossing just before each junction
       return ((acrossPos % 1) + 1) % 1 < 0.5 ? 0.74 : 0.1
     }
-    return 0.1
+    // Patched asphalt, wheel polish and the odd drain lid keep the road from
+    // reading as one flat band of returns.
+    const cell = hash2(Math.floor((onX ? x : y) / 3.2), Math.floor((onX ? y : x) / 3.2))
+    const fine = hash2(x * 3.1, y * 3.1)
+    let r = 0.085 + cell * 0.035 + fine * 0.012
+    if (across > 2.4 && across < 4.6) r += 0.018 // polished wheel tracks
+    if (hash2(Math.floor(x / 7.5), Math.floor(y / 7.5)) > 0.94) r += 0.12 // repair patch
+    if (across > 5.2 && across < 5.75 && ((along * 0.5) % 1) < 0.22) r = 0.34 // drain grate
+    return r
   }
-  if (dx < WALK_OUTER || dy < WALK_OUTER) return 0.32
+  if (dx < WALK_OUTER || dy < WALK_OUTER) {
+    // Concrete slabs: seams every 1.6 m along the kerb, a little staining.
+    const along = dx < WALK_OUTER ? y : x
+    const across = dx < WALK_OUTER ? x : y
+    const seam = hash2(Math.floor(along / 1.6), Math.floor(across / 1.6))
+    const edge = Math.abs((along / 1.6) % 1 - 0.5) > 0.47
+    return edge ? 0.2 : 0.3 + seam * 0.07
+  }
   const park = x > 0 && x < PITCH && y > 0 && y < PITCH
-  return park ? 0.46 : 0.22
+  const mottled = hash2(x * 0.7, y * 0.7)
+  if (park) {
+    // A ring path and four radial walks give the park a plan, not just grass.
+    // Paths are pale compacted gravel, so they read above the lawn.
+    const pr = Math.hypot(x - 40, y - 40)
+    if (pr < 5.6) return 0.7 + mottled * 0.08
+    if (pr > 23.1 && pr < 25.3) return 0.68 + mottled * 0.08
+    if (pr > 5.6 && pr < 25.3) {
+      const ang = Math.atan2(y - 40, x - 40)
+      const f = ((ang / (Math.PI / 2)) % 1 + 1) % 1
+      if (Math.min(f, 1 - f) * (Math.PI / 2) * pr < 1.15) return 0.68 + mottled * 0.08
+    }
+    return 0.38 + mottled * 0.16
+  }
+  return 0.19 + mottled * 0.08
 }
 
 // ── Ego path: clockwise loop around the park block, driving on the right ───
@@ -269,11 +306,57 @@ export function buildScene(seed = 7): Scene {
           const lx = wx - 3 - inset, ly = wy - 3 - inset
           const tall = rng.next() < 0.18
           const h = tall ? rng.range(32, 60) : rng.range(8, 24)
-          const glass = rng.next() < (tall ? 0.6 : 0.12)
-          statics.push(box(
-            x0 + wx * (a + 0.5), y0 + wy * (b + 0.5), h / 2, lx, ly, h, 0,
-            glass ? 0.12 : rng.range(0.24, 0.62), CLASS.building, glass,
-          ))
+          const glass = rng.next() < (tall ? 0.55 : 0.1)
+          const cx = x0 + wx * (a + 0.5), cy = y0 + wy * (b + 0.5)
+          const style = glass ? 2 : 1
+          const refl = glass ? 0.16 : rng.range(0.26, 0.58)
+          const shop = !glass && rng.next() < 0.45
+
+          // A recessed shopfront under the upper floors: one strong eave line,
+          // glazing that returns weakly, and a pavement that reads as covered.
+          const base = shop ? 3.4 : 0
+          if (shop) {
+            statics.push(box(cx, cy, base / 2, lx - 0.7, ly - 0.7, base, 0, 0.13, CLASS.building, false, 3))
+          }
+
+          // Tall blocks step back as they rise, so the skyline is built from
+          // real massing rather than one extruded rectangle.
+          const tiers = tall ? 3 : 1
+          let z0 = base
+          let fx = lx, fy = ly
+          for (let t = 0; t < tiers; t++) {
+            const share = tiers === 1 ? 1 : t === 0 ? 0.52 : t === 1 ? 0.3 : 0.18
+            const th = (h - base) * share
+            statics.push(box(cx, cy, z0 + th / 2, fx, fy, th, 0, refl, CLASS.building, glass, style))
+            z0 += th
+            if (t < tiers - 1) {
+              // A cornice slab marks the setback.
+              statics.push(box(cx, cy, z0 + 0.09, fx + 0.5, fy + 0.5, 0.18, 0, 0.3, CLASS.building))
+              fx *= 0.86
+              fy *= 0.86
+            }
+          }
+
+          // Parapet wall around the roof. Thin, tall and dark, it gives laser
+          // returns the crisp roof edge that a bare box never has.
+          if (h < 50) {
+            const top = h + 0.45
+            statics.push(box(cx, cy + fy / 2 - 0.12, top, fx, 0.24, 0.9, 0, 0.34, CLASS.building))
+            statics.push(box(cx, cy - fy / 2 + 0.12, top, fx, 0.24, 0.9, 0, 0.34, CLASS.building))
+            statics.push(box(cx + fx / 2 - 0.12, cy, top, 0.24, fy - 0.48, 0.9, 0, 0.34, CLASS.building))
+            statics.push(box(cx - fx / 2 + 0.12, cy, top, 0.24, fy - 0.48, 0.9, 0, 0.34, CLASS.building))
+          }
+
+          // Rooftop plant: air handlers, a stair head, sometimes a mast.
+          const units = rng.int(1, 2)
+          for (let k = 0; k < units; k++) {
+            const uw = rng.range(1.4, 3.2), ud = rng.range(1.2, 2.4), uh = rng.range(0.8, 1.8)
+            statics.push(box(
+              cx + rng.range(-fx * 0.28, fx * 0.28), cy + rng.range(-fy * 0.28, fy * 0.28), h + uh / 2,
+              uw, ud, uh, 0, 0.3, CLASS.building,
+            ))
+          }
+          if (h > 38) statics.push(cylinder(cx + fx * 0.2, cy - fy * 0.2, h, h + rng.range(5, 11), 0.07, 0.5, CLASS.pole))
         }
       }
     }
@@ -341,6 +424,83 @@ export function buildScene(seed = 7): Scene {
           }
         }
       }
+    }
+  }
+
+  // Raised pavements give every street a section: a 12 cm kerb, three metres of
+  // concrete, then the building line. Without them a road is just a colour.
+  const CUTS = [MAP_MIN, ...ROAD_LINES, MAP_MAX]
+  for (const line of ROAD_LINES) {
+    for (const alongY of [true, false]) {
+      for (const side of [-1, 1]) {
+        for (let k = 0; k < CUTS.length - 1; k++) {
+          const a = CUTS[k] + 11, b = CUTS[k + 1] - 11
+          if (b - a < 12) continue
+          const along = (a + b) / 2, span = b - a
+          const off = line + side * (ROAD_HALF + 1.5)
+          statics.push(box(
+            alongY ? off : along, alongY ? along : off, 0.06,
+            alongY ? 3 : span, alongY ? span : 3, 0.12,
+            0, 0.3, CLASS.ground,
+          ))
+        }
+      }
+    }
+  }
+
+  // Traffic signals at the loop corners: a mast arm over the carriageway and
+  // three retroreflective lenses. They are the brightest fixed returns in the
+  // scene, exactly as they are to a real sensor.
+  const signals: Array<[number, number, number]> = [
+    [2.6, 2.6, 0], [77.4, 2.6, Math.PI / 2], [77.4, 77.4, Math.PI], [2.6, 77.4, -Math.PI / 2],
+  ]
+  for (const [sx, sy, yaw] of signals) {
+    const c = Math.cos(yaw), s = Math.sin(yaw)
+    statics.push(cylinder(sx, sy, 0, 6.2, 0.11, 0.32, CLASS.pole))
+    // Arm reaches 5.2 m over the road, signal head at its end.
+    statics.push(box(sx + c * 2.6, sy + s * 2.6, 6.05, 5.2, 0.14, 0.14, yaw, 0.32, CLASS.pole))
+    const hx = sx + c * 5, hy = sy + s * 5
+    statics.push(box(hx, hy, 5.55, 0.34, 0.3, 1.05, yaw, 0.22, CLASS.pole))
+    for (let k = 0; k < 3; k++) {
+      statics.push(box(hx + c * 0.19, hy + s * 0.19, 5.92 - k * 0.32, 0.06, 0.2, 0.24, yaw, 2.4, CLASS.pole))
+    }
+  }
+
+  // A bus shelter on the park side, and small street furniture that catches
+  // the beam at close range.
+  {
+    const sx = 11.4, sy = 43
+    statics.push(box(sx, sy, 2.62, 1.7, 5.2, 0.12, 0, 0.34, CLASS.building))
+    statics.push(box(sx + 0.7, sy - 2.3, 1.3, 0.12, 0.12, 2.6, 0, 0.32, CLASS.pole))
+    statics.push(box(sx + 0.7, sy + 2.3, 1.3, 0.12, 0.12, 2.6, 0, 0.32, CLASS.pole))
+    statics.push(box(sx + 0.8, sy, 1.45, 0.06, 4.8, 1.7, 0, 0.1, CLASS.building, false, 3))
+    statics.push(box(sx - 0.1, sy, 0.48, 0.5, 3.4, 0.09, 0, 0.3, CLASS.pole))
+  }
+  const bins: Array<[number, number]> = [[10.2, 5.6], [9.8, 74.2], [70.4, 9.8], [74.6, 70.2], [14, 41.8]]
+  for (const [bx, by] of bins) {
+    statics.push(cylinder(bx, by, 0, 0.95, 0.26, 0.28, CLASS.pole))
+    statics.push(cylinder(bx, by, 0.95, 1.02, 0.3, 0.2, CLASS.pole))
+  }
+  const hydrants: Array<[number, number]> = [[-6.2, 34], [86.2, 46], [34, -6.4], [46, 86.4]]
+  for (const [hx, hy] of hydrants) {
+    statics.push(cylinder(hx, hy, 0, 0.72, 0.17, 0.55, CLASS.pole))
+    statics.push(sphere(hx, hy, 0.76, 0.17, 0.5, CLASS.pole, 0))
+  }
+  // Park benches, and bollards along the crossings.
+  for (let k = 0; k < 6; k++) {
+    const a = (k / 6) * Math.PI * 2 + 0.25
+    const bx = 40 + Math.cos(a) * 17.5, by = 40 + Math.sin(a) * 17.5
+    const yaw = a + Math.PI / 2
+    const c = Math.cos(yaw), s = Math.sin(yaw)
+    statics.push(box(bx, by, 0.46, 0.58, 1.9, 0.08, yaw, 0.34, CLASS.pole))
+    statics.push(box(bx - s * 0.28, by + c * 0.28, 0.76, 0.06, 1.9, 0.5, yaw, 0.34, CLASS.pole))
+    statics.push(cylinder(bx + c * 0.7 - s * 0.22, by + s * 0.7 + c * 0.22, 0, 0.45, 0.05, 0.3, CLASS.pole))
+    statics.push(cylinder(bx - c * 0.7 - s * 0.22, by - s * 0.7 + c * 0.22, 0, 0.45, 0.05, 0.3, CLASS.pole))
+  }
+  for (const [jx, jy] of [[3, 3], [77, 3], [77, 77], [3, 77]]) {
+    for (let k = 0; k < 5; k++) {
+      const bx = jx + (k - 2) * 1.6
+      statics.push(cylinder(bx, jy + (jy < 40 ? -10.6 : 10.6), 0, 0.85, 0.09, 0.42, CLASS.pole))
     }
   }
 

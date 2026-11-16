@@ -37,11 +37,14 @@ describe('simulator', () => {
   it('keeps every return inside the instrumented range and above the road', () => {
     const sim = new Simulator(sensor, DEFAULT_ENVIRONMENT)
     const f = decodeFrame(sim.step(0.1).frame)
+    // The frame stores returns against the pose at the end of the revolution,
+    // so a point fired at the gate can sit one ego-motion step farther out.
+    const reach = sensor.maxRange + DEFAULT_ENVIRONMENT.egoSpeed * 0.1 + 0.2
     for (let i = 0; i < f.pointCount; i++) {
       const x = f.f32[i * 4], y = f.f32[i * 4 + 1], z = f.f32[i * 4 + 2]
       const r = Math.hypot(x, y, z)
       expect(r).toBeGreaterThan(sensor.minRange - 0.2)
-      expect(r).toBeLessThan(sensor.maxRange + 0.2)
+      expect(r).toBeLessThan(reach)
       expect(z).toBeGreaterThan(-sensor.mountHeight - 0.2)
     }
   })
