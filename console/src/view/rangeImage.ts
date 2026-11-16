@@ -310,11 +310,11 @@ export class RangeImage {
     // The sweep cursor with a short wake: the sensor is turning clockwise, which
     // moves the cursor from right to left in this bearing map.
     const sx = (0.5 - this.sweepAz / TWO_PI) * W
-    const trail = this.ctx.createLinearGradient(sx, 0, sx + 34, 0)
-    trail.addColorStop(0, 'rgba(242,194,48,0.16)')
+    const trail = this.ctx.createLinearGradient(sx, 0, sx + 30, 0)
+    trail.addColorStop(0, 'rgba(242,194,48,0.11)')
     trail.addColorStop(1, 'rgba(242,194,48,0)')
     this.ctx.fillStyle = trail
-    this.ctx.fillRect(sx, 0, 34, imgH)
+    this.ctx.fillRect(sx, 0, 30, imgH)
     this.ctx.fillStyle = 'rgba(242,194,48,0.5)'
     this.ctx.fillRect(sx, 0, 1, imgH)
     this.ctx.fillStyle = EXHIBIT
