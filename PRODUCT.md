@@ -45,7 +45,7 @@ Desktop browser, mouse and keyboard, a large viewport. Used for exploration and 
 - Microphone sound event detection (requested by the user): likely class, dBFS level, left/right bearing from two channels. Interface sounds, off by default.
 - Room scans from an Android phone through WebXR depth sensing (requested by the user), relayed to a desktop through the bridge.
 - Every detection is logged as a numbered exhibit; recordings are sealed with their SHA-256. The visual world is an investigative evidence unit, with no real agency's name or marks.
-- No LiDAR or ESP32 hardware is available today: the LiDAR drive and the Wi-Fi room come from simulators and must be labelled as simulated. Microphone and phone scan input are real; estimated or heuristic results (sound classes, ARCore depth) say so.
+- Available user hardware: Samsung Galaxy A40 and a Huawei router. No LiDAR or ESP32 hardware is available today: the LiDAR drive and the Wi-Fi room come from simulators and must be labelled as simulated. Microphone and phone scan input are real; estimated or heuristic results (sound classes, ARCore depth) say so.
 - Undecided: additional sensor protocols (Ouster, Livox), ROS 2 integration, a C++ core.
 
 ## Evidence on Hand

@@ -11,3 +11,5 @@ __pycache__/
 .pytest_cache/
 *.fthm
 .DS_Store
+
+.taste-skill/

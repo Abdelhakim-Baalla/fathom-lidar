@@ -197,3 +197,30 @@ Neither the phone scan nor the ESP32 path has been run on real hardware:
 
 - **Phone scan:** its unprojection is unit-tested, and its frames were exercised end to end through the bridge with a stand-in client.
 - **ESP32:** its serial path was exercised end to end with a stand-in board writing esp-csi lines to a virtual serial port.
+
+## Public field release
+
+Console: https://abdelhakim-baalla.github.io/fathom-lidar/
+
+The console starts with hardware input, with microphone access and explicitly labelled
+simulation available separately. WebGL 2 enables full-density rendering; when it is
+unavailable, an interactive Canvas 2D view draws up to 60,000 sampled points. Acquisition,
+range imagery and frame recording remain independent of that display limit. A lost GPU
+context switches to software; **Try GPU** retries without restarting acquisition.
+
+Wi-Fi sensing requires compatible ESP32 CSI input. The detector establishes a five-second
+quiet baseline, reports calibration/stale states, and resets after packet gaps or channel
+width changes. **Recalibrate quiet baseline** is available after repositioning the radios.
+An ordinary router and browser do not produce a room image or locate people through walls.
+A Galaxy A40 can be tried for microphone input; phone depth scanning is offered only when
+the browser reports the required WebXR capability. Physical LiDAR and ESP32 trials remain
+unverified.
+
+Audio offers Field and Cinematic profiles, per-event toggles and local custom clips.
+The original intro is optional and skippable. Bundled effects are CC0; see
+[provenance](console/public/audio/LICENSES.md). Exact YouTube/game audio is not bundled.
+
+Project code and original identity assets are [MIT licensed](LICENSE). Third-party
+sound/font dependencies retain their respective licenses. This project makes no claim
+of agency affiliation, threat identification, deployment certification, or exclusive
+rights to the name Fathom.

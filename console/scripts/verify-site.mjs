@@ -34,6 +34,6 @@ for (const url of urls) {
     assert.ok(existsSync(destination), `${path}: missing ${target}`)
   }
 }
-assert.equal(urls.length, 6)
+assert.equal(urls.length, 7)
 assert.ok(readFileSync(resolve(dist, '404.html'), 'utf8').includes('content="noindex"'))
 console.log(`Verified ${urls.length} indexable pages, structured data, unique titles, local links, images and 404 exclusion.`)
