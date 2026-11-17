@@ -11,12 +11,12 @@ const TWO_PI = Math.PI * 2
  * stand out of the asphalt instead of the ground reading as one flat band.
  */
 const STOPS: Array<[number, number, number]> = [
-  [244, 238, 222],
-  [196, 193, 172],
-  [136, 146, 138],
-  [78, 99, 106],
-  [38, 56, 66],
-  [18, 28, 34],
+  [244, 244, 245],
+  [202, 205, 211],
+  [148, 155, 166],
+  [85, 94, 108],
+  [43, 50, 62],
+  [21, 25, 34],
 ]
 const BACKGROUND: [number, number, number] = [7, 10, 12]
 const INK = '#f4f4f5'

@@ -8,7 +8,7 @@ import { decodeFrame, FLAG_REVOLUTION_END, FLAG_SCAN, FLAG_SIMULATED, FrameError
 import { PhoneScan, type ScanStats } from './scan/xr'
 import { PRESETS, type Environment, type SensorConfig } from './sim/sensor'
 import type { FromWorker, ToWorker } from './sim/worker'
-import type { CloudView } from './view/cloud'
+import type { PointView } from './view/pointView'
 import type { RangeImage } from './view/rangeImage'
 import type { Spectrogram } from './view/spectrogram'
 import type { Timeline } from './view/timeline'
@@ -31,6 +31,8 @@ export interface WifiState {
   rssi: number
   packetsPerSecond: number
   people: number
+  calibrationProgress: number
+  lastPacketAge: number
 }
 
 export interface MicInfo {
@@ -96,7 +98,7 @@ const LOG_AFTER_HITS = 8
  */
 export class Engine {
   private worker: Worker
-  private views: { cloud: CloudView | null; range: RangeImage } | null = null
+  private views: { cloud: PointView | null; range: RangeImage } | null = null
   private instruments: { wifi: WifiView; spectrogram: Spectrogram; timeline: Timeline } | null = null
   readonly listener = new Listener()
   readonly cues = new Cues()
@@ -157,7 +159,7 @@ export class Engine {
     accumulating: false,
     scan: null,
     scanMessage: '',
-    wifi: { mode: 'off', link: 'idle', message: '', index: 0, score: 0, moving: false, rssi: 0, packetsPerSecond: 0, people: 2 },
+    wifi: { mode: 'off', link: 'idle', message: '', index: 0, score: 0, moving: false, rssi: 0, packetsPerSecond: 0, people: 2, calibrationProgress: 0, lastPacketAge: -1 },
     mic: { state: 'off', message: '', device: '', stereo: false },
     sounds: false,
     volume: 35,
@@ -223,7 +225,7 @@ export class Engine {
     this.worker.postMessage(m, transfer)
   }
 
-  attach(cloud: CloudView | null, range: RangeImage): void {
+  attach(cloud: PointView | null, range: RangeImage): void {
     this.views = { cloud, range }
     this.attachCloud(cloud)
     range.setChannels(this.sensor.channels)
@@ -232,7 +234,7 @@ export class Engine {
   }
 
   /** The GPU view can restart without interrupting acquisition or the range image. */
-  attachCloud(cloud: CloudView | null): void {
+  attachCloud(cloud: PointView | null): void {
     if (!this.views) return
     this.views.cloud = cloud
     if (!cloud) return
@@ -382,26 +384,36 @@ export class Engine {
     this.emit({ volume })
   }
 
+  calibrateWifi(): void {
+    if (this.wifiEpisode?.open) { this.wifiEpisode.open = false; this.wifiEpisode.end = clock() }
+    this.wifiEpisode = null
+    this.motion.reset()
+    this.emit({ wifi: { ...this.state.wifi, calibrationProgress: 0, score: 0, moving: false } })
+  }
+
   setWifiMode(mode: WifiMode, url?: string): void {
     void this.serial.disconnect()
     clearInterval(this.wifiTimer)
     this.wifiSocket?.close()
     this.wifiSocket = null
     this.motion.reset()
+    this.lastCsiAt = this.wifiPackets = 0
     this.instruments?.wifi.clear()
     if (this.wifiEpisode?.open) this.wifiEpisode.open = false
     this.wifiEpisode = null
-    this.emit({ wifi: { ...this.state.wifi, mode, link: 'idle', message: '', moving: false, score: 0, index: 0, packetsPerSecond: 0, rssi: 0 } })
+    this.emit({ wifi: { ...this.state.wifi, mode, link: 'idle', message: '', moving: false, score: 0, index: 0, packetsPerSecond: 0, rssi: 0, calibrationProgress: 0, lastPacketAge: -1 } })
     if (mode === 'simulated') {
       // 100 packets a second, as an ESP32 is usually configured to send.
       let last = performance.now()
+      let packetTime = clock()
       this.wifiTimer = window.setInterval(() => {
         const now = performance.now()
         let steps = Math.min(20, Math.round((now - last) / 10))
         last += steps * 10
         while (steps-- > 0) {
           const p = this.wifiSim.step(0.01)
-          this.onCsi(clock() - steps * 0.01, p.amp, p.rssi)
+          packetTime += .01
+          this.onCsi(packetTime, p.amp, p.rssi)
         }
       }, 20)
     } else if (mode === 'serial') {
@@ -851,6 +863,8 @@ export class Engine {
         ...this.state.wifi,
         index: this.motion.index, score: this.motion.score, moving: now - this.lastCsiAt < 2500 && this.motion.moving,
         packetsPerSecond: this.wifiPackets / dt,
+        calibrationProgress: this.motion.calibrationProgress,
+        lastPacketAge: this.lastCsiAt ? (now - this.lastCsiAt) / 1000 : -1,
       },
     }
     this.wifiPackets = 0

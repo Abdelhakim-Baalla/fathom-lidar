@@ -5,7 +5,7 @@
 
 /*
   Chain of Custody. Gunmetal locker greys for the shell, label stock for ink,
-  scene-marker yellow for exhibits, seal red for recording and seals, forensic
+  signal orange for exhibits, seal red for recording and seals, forensic
   blue for Wi-Fi. Everything sits on one 8 px module.
 */
 :root {
@@ -16,8 +16,8 @@
   --raise-2: #283035;
   --line: #262d32;
   --ink: #f4f4f5;
-  --ink-2: #b3ad9f;
-  --ink-3: #8b877e;
+  --ink-2: #c3c5cb;
+  --ink-3: #9b9fa8;
   --exhibit: #f48142;
   --exhibit-ink: #14110a;
   --exhibit-wash: rgb(244 129 66 / 0.12);

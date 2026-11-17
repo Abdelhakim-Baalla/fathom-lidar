@@ -22,7 +22,7 @@ export function Aperture() {
   </svg>
 }
 
-export function Acquisition({ state, connect, demo }: { state: EngineState; connect: () => void; demo: () => void }) {
+export function Acquisition({ state, connect, demo, microphone }: { state: EngineState; connect: () => void; demo: () => void; microphone: () => void }) {
   const connected = state.bridge === 'open'
   return <section className="acquisition" aria-label="Connect a sensor">
     <Aperture />
@@ -31,7 +31,8 @@ export function Acquisition({ state, connect, demo }: { state: EngineState; conn
       <p>{connected ? 'Awaiting sensor frames.' : 'LiDAR · Wi-Fi CSI · Acoustic'}</p>
       <div className="acquisition__actions">
         <button className="btn btn--primary" onClick={connect} disabled={state.bridge === 'connecting'}>{connected ? 'Reconnect sensor' : 'Connect sensor'}</button>
-        <button className="btn btn--quiet" onClick={demo}>Explore simulation</button>
+        <button className="btn" onClick={microphone}>Use microphone</button>
+        <button className="btn btn--quiet acquisition__demo" onClick={demo}>Explore simulation ↗</button>
       </div>
     </div>
   </section>

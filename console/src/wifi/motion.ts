@@ -32,6 +32,7 @@ export class MotionDetector {
   floor = 0
   score = 0
   moving = false
+  calibrationProgress = 0
   onEpisode: (e: MotionEpisode) => void = () => {}
 
   private ring: Float32Array[] = []
@@ -39,11 +40,15 @@ export class MotionDetector {
   private history: Array<{ t: number; index: number }> = []
   private above = 0
   private below = 0
-  private lastT = 0
+  private lastT: number | null = null
+  private calibrationStart: number | null = null
   private episode: MotionEpisode | null = null
   private used: boolean[] | null = null
 
   reset(): void {
+    this.lastT = this.calibrationStart = null
+    this.above = this.below = this.calibrationProgress = 0
+    this.latest = new Float32Array(0)
     this.ring = []
     this.times = []
     this.history = []
@@ -54,6 +59,11 @@ export class MotionDetector {
   }
 
   push(t: number, amp: ArrayLike<number>): void {
+    if (!Number.isFinite(t) || amp.length < 2 || amp.length > 1024 || Array.from(amp).some(v => !Number.isFinite(v) || v < 0)) return
+    // Reconnects and channel-width changes invalidate the old baseline/window.
+    if ((this.lastT !== null && (t <= this.lastT || t - this.lastT > .5)) || (this.used && this.used.length !== amp.length)) this.reset()
+    if (!Array.from(amp).some(v => v > 0)) return
+    this.calibrationStart ??= t
     // Guard and null subcarriers read as zero on real hardware: leave them out.
     if (!this.used || this.used.length !== amp.length) this.used = Array.from(amp, (a) => a > 0)
     else for (let i = 0; i < amp.length; i++) if (amp[i] > 0) this.used[i] = true
@@ -70,7 +80,7 @@ export class MotionDetector {
       this.times.shift()
       this.ring.shift()
     }
-    const dt = this.lastT ? Math.max(0, t - this.lastT) : 0
+    const dt = this.lastT !== null ? Math.max(0, t - this.lastT) : 0
     this.lastT = t
     if (this.ring.length < 10) return
 
@@ -84,6 +94,7 @@ export class MotionDetector {
       cv.push(Math.sqrt(v) / (m || 1))
     }
     cv.sort((a, b) => a - b)
+    if (!cv.length) return
     this.index = cv[cv.length >> 1] * 100
 
     // Quiet floor: the 10th percentile of the last two quiet minutes, never below a small epsilon.
@@ -94,6 +105,8 @@ export class MotionDetector {
     const sorted = this.history.map((h) => h.index).sort((a, b) => a - b)
     this.floor = Math.max(0.05, sorted[Math.floor(sorted.length * 0.1)])
     this.score = this.index / this.floor
+    this.calibrationProgress = Math.min(1, (t - this.calibrationStart) / 5, this.history.length / 40)
+    if (this.calibrationProgress < 1) { this.score = 0; return }
 
     if (!this.moving) {
       this.above = this.score > ON ? this.above + dt : 0

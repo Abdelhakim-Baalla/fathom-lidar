@@ -1,7 +1,7 @@
 import { ROOM, type Person } from '../wifi/csi'
 import { PALETTE, hex } from './palettes'
 
-const COLS = 600 // ten seconds at 60 frames per second
+const COLS = 600 // last 600 received packets; duration depends on the actual packet rate
 const PLAN_W = 168
 const TRACE_W = 220
 const ON = 2.6
@@ -23,7 +23,6 @@ export class WifiView {
   private w = 0
   private h = 0
   private canvas: HTMLCanvasElement
-  private fresh = false
   private rows = 56
   private ramp: Array<[number, number, number]> = []
 
@@ -56,8 +55,8 @@ export class WifiView {
   }
 
   push(norm: Float32Array, score: number, moving: boolean, people: Person[] | null): void {
-    this.fresh = true
     this.latest = norm
+    this.scroll()
     this.people = people
     this.score.push(score)
     this.moving.push(moving)
@@ -84,11 +83,14 @@ export class WifiView {
 
   private scroll(): void {
     const a = this.latest
-    if (!a || !this.fresh) return
-    this.fresh = false
+    if (!a) return
     if (a.length !== this.rows) {
       this.rows = a.length
       this.wf.height = this.rows
+      this.score = []
+      this.moving = []
+      this.wfCtx.fillStyle = '#0d1012'
+      this.wfCtx.fillRect(0, 0, COLS, this.rows)
     }
     // Shift left one column and paint the newest packet on the right.
     this.wfCtx.drawImage(this.wf, -1, 0)
@@ -106,7 +108,6 @@ export class WifiView {
   private draw(): void {
     const { ctx, w, h } = this
     if (!w || !h) return
-    this.scroll()
     const p = PALETTE
     ctx.clearRect(0, 0, w, h)
     ctx.font = '600 11px "Sofia Sans Variable", system-ui, sans-serif'
@@ -160,7 +161,7 @@ export class WifiView {
     const traceWidth = Math.min(TRACE_W, w * 0.32)
     const wfW = Math.max(1, w - x0 - traceWidth - 12)
     ctx.fillStyle = '#a8adb6'
-    ctx.fillText(`Subcarrier amplitude · ${this.rows} subcarriers · recent samples`, x0, 2)
+    ctx.fillText(`Subcarrier amplitude · ${this.rows} subcarriers · 600 packets`, x0, 2)
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(this.wf, x0, 18, wfW, h - 20)
 
@@ -176,7 +177,7 @@ export class WifiView {
     for (let i = 0; i < n; i++) {
       if (!this.moving[i]) continue
       ctx.fillStyle = 'rgba(91,134,255,0.22)'
-      ctx.fillRect(tx0 + (i / COLS) * traceWidth, top, traceWidth / COLS + 0.5, bh)
+      ctx.fillRect(tx0 + ((i + COLS - n) / COLS) * traceWidth, top, traceWidth / COLS + 0.5, bh)
     }
     ctx.strokeStyle = '#a8adb6'
     ctx.setLineDash([3, 3])

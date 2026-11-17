@@ -26,3 +26,26 @@ describe('Wi-Fi motion', () => {
     expect(new WifiSim().step(0.01).amp.length).toBe(56)
   })
 })
+
+it('calibrates before emitting events and resets the baseline after a packet gap', () => {
+  const det = new MotionDetector()
+  for (let i = 0; i < 600; i++) det.push(i / 100, [12, 18, 22, 16])
+  expect(det.calibrationProgress).toBe(1)
+  det.push(7, [12, 18, 22, 16])
+  expect(det.calibrationProgress).toBe(0)
+  expect(det.moving).toBe(false)
+  expect(det.score).toBe(0)
+})
+
+it('handles channel width changes and rejects unusable packets without NaN scores', () => {
+  const det = new MotionDetector()
+  for (let i = 0; i < 600; i++) det.push(i / 100, [12, 18, 22, 16])
+  for (let i = 600; i < 610; i++) det.push(i / 100, [10, 20])
+  expect(det.latest.length).toBe(2)
+  expect(det.calibrationProgress).toBeLessThan(1)
+  det.push(6.1, [0, 0])
+  det.push(6.2, [NaN, 1])
+  det.push(6.3, [-1, 2])
+  expect(Number.isFinite(det.score)).toBe(true)
+  expect(Number.isFinite(det.index)).toBe(true)
+})

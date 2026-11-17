@@ -19,6 +19,8 @@ import {
   type Weather,
 } from './sim/sensor'
 import { CloudView, type CameraPreset, type Layers } from './view/cloud'
+import { SoftwareCloud } from './view/softwareCloud'
+import type { PointView } from './view/pointView'
 import { CLASS_NAMES, PALETTE, type ColorMode } from './view/palettes'
 import { RangeImage } from './view/rangeImage'
 import { Spectrogram } from './view/spectrogram'
@@ -88,10 +90,12 @@ export default function App() {
   const [fileError, setFileError] = useState('')
   const [xr, setXr] = useState<boolean | null>(null)
   const [spacing, setSpacing] = useState(10)
+  const [expanded, setExpanded] = useState(false)
   const [audioOpen, setAudioOpen] = useState(false)
   const [introReplay, setIntroReplay] = useState(0)
   const closeAudio = useCallback(() => setAudioOpen(false), [])
-  const [cloudStatus, setCloudStatus] = useState<'ready' | 'unavailable' | 'lost'>('ready')
+  const [cloudStatus, setCloudStatus] = useState<'ready' | 'software' | 'unavailable'>('ready')
+  const [preferSoftware, setPreferSoftware] = useState(false)
   const [cloudAttempt, setCloudAttempt] = useState(0)
   const [sealed, setSealed] = useState<number | null>(null)
 
@@ -102,7 +106,7 @@ export default function App() {
   const soundCanvas = useRef<HTMLCanvasElement>(null)
   const timelineCanvas = useRef<HTMLCanvasElement>(null)
   const overlay = useRef<HTMLDivElement>(null)
-  const views = useRef<{ cloud: CloudView | null; timeline: Timeline } | null>(null)
+  const views = useRef<{ cloud: PointView | null; timeline: Timeline } | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -129,35 +133,43 @@ export default function App() {
 
   useEffect(() => {
     const target = canvas.current!
-    let cloud: CloudView
+    let cloud: PointView
+    let status: 'ready' | 'software' = 'ready'
     try {
-      cloud = new CloudView(target, labels.current!)
-    } catch (error) {
-      console.warn('Fathom: 3D view unavailable; acquisition and 2D instruments remain active.', error)
-      // oxlint-disable-next-line react/set-state-in-effect -- Reflect the result of synchronizing with the browser's GPU.
-      setCloudStatus('unavailable')
+      if (preferSoftware) {
+        cloud = new SoftwareCloud(target)
+        status = 'software'
+      } else {
+        // A denied WebGL request is an expected capability result, not a console error.
+        const gl = target.getContext('webgl2', { antialias: true, alpha: false })
+        if (gl) cloud = new CloudView(target, labels.current!)
+        else { cloud = new SoftwareCloud(target); status = 'software' }
+      }
+    } catch {
+      // A partially initialized GPU canvas cannot switch context types. Replace it.
+      // oxlint-disable-next-line react/set-state-in-effect -- Replace a browser canvas after GPU initialization fails.
+      if (!preferSoftware) { setPreferSoftware(true); setCloudAttempt(value => value + 1) }
+      else setCloudStatus('unavailable')
       return
     }
     views.current!.cloud = cloud
     engine.attachCloud(cloud)
     cloud.onSelect = (trackId) => setSelected(trackId === null ? null : engine.exhibitOfTrack(trackId) ?? null)
     // oxlint-disable-next-line react/set-state-in-effect -- The external renderer has just attached successfully.
-    setCloudStatus('ready')
+    setCloudStatus(status)
     const lost = (event: Event) => {
       event.preventDefault() // Allow the browser and Three.js to restore this context.
-      setCloudStatus('lost')
+      setPreferSoftware(true)
+      setCloudAttempt(value => value + 1)
     }
-    const restored = () => setCloudStatus('ready')
     target.addEventListener('webglcontextlost', lost)
-    target.addEventListener('webglcontextrestored', restored)
     return () => {
       target.removeEventListener('webglcontextlost', lost)
-      target.removeEventListener('webglcontextrestored', restored)
       engine.attachCloud(null)
       if (views.current) views.current.cloud = null
       cloud.dispose()
     }
-  }, [cloudAttempt])
+  }, [cloudAttempt, preferSoftware])
 
   useEffect(() => engine.configure(sensor, env), [sensor, env])
   useEffect(() => views.current?.cloud?.setColorMode(mode), [mode, cloudAttempt])
@@ -241,6 +253,7 @@ export default function App() {
   const hasFrames = s.stats.receivedFrames > 0
   const stale = s.running && s.stats.lastFrameAge > 2.5
   const sourceLabel = sim || s.stats.simulated ? 'SIMULATION' : s.source === 'recording' ? 'REPLAY' : !hasFrames ? 'STANDBY' : stale ? 'STALE INPUT' : !s.running ? 'PAUSED' : 'MEASURED INPUT'
+  const radioState = s.wifi.mode === 'off' ? 'OFF' : s.wifi.lastPacketAge < 0 ? 'WAITING FOR CSI' : s.wifi.lastPacketAge > 2.5 ? 'STALE INPUT' : s.wifi.calibrationProgress < 1 ? 'CALIBRATING' : s.wifi.moving ? 'MOTION' : 'QUIET'
   const legend = COLOR_MODES.find((m) => m.id === mode)!
   const counts = useMemo(() => {
     const c = { all: s.exhibits.length, object: 0, wifi: 0, sound: 0, recording: 0 }
@@ -249,8 +262,8 @@ export default function App() {
   }, [s.exhibits])
 
   return (
-    <div className="console">
-      <Intro replay={introReplay} />
+    <div className={`console ${expanded ? 'console--expanded' : ''}`}>
+      <Intro key={introReplay} replay={introReplay} />
       <header className="bar">
         <a className="wordmark" href="#" aria-label="Fathom Field Systems" onClick={(e) => { e.preventDefault(); setFeed('lidar') }}><img src={`${import.meta.env.BASE_URL}identity/fathom-lockup.svg`} alt="Fathom Field Systems" width="176" height="40" /></a>
         <span className="case">Session <span className="num">{CASE}</span></span>
@@ -260,7 +273,7 @@ export default function App() {
             stat={s.source === 'scan' ? `${compact.format(s.scan?.points ?? 0)} pts kept` : `${compact.format(s.stats.pointsPerSecond)} pts/s`} />
           <FeedChip id="wifi" feed={feed} setFeed={setFeed} name="Wi-Fi" sim={s.wifi.mode === 'simulated'}
             live={s.wifi.packetsPerSecond > 0} alert={s.wifi.moving}
-            stat={s.wifi.mode === 'off' ? 'off' : s.wifi.moving ? 'motion' : 'quiet'} />
+            stat={radioState.toLowerCase()} />
           <FeedChip id="acoustic" feed={feed} setFeed={setFeed} name="Acoustic" sim={false}
             live={s.mic.state === 'on'} stat={s.mic.state === 'on' ? `${counts.sound} events` : 'off'} />
         </nav>
@@ -289,8 +302,8 @@ export default function App() {
                   else if (v === 'recording') fileInput.current?.click()
                   else if (v === 'scan') engine.startScan(overlay.current!, relay ? bridgeUrl : null)
                 }}>
-                  <option value="simulator">Simulated city drive</option>
                   <option value="bridge">Connected device</option>
+                  <option value="simulator">Demo · simulated city drive</option>
                   <option value="recording">Recording file</option>
                   <option value="scan" disabled={!xr}>Phone room scan{xr === false ? ' (needs an ARCore phone)' : ''}</option>
                 </select>
@@ -406,7 +419,7 @@ export default function App() {
                     onChange={() => engine.setWifiMode(id, csiUrl)} /><span>{label}</span></label>
                 ))}
               </fieldset>
-              <p className="note">Real sensing requires an ESP32 running esp-csi. A browser cannot extract channel measurements from an ordinary router alone.</p>
+              <details className="setup-note"><summary>Hardware requirements</summary><p className="note">ESP32 with esp-csi firmware. A router alone does not expose CSI to this browser. <a href={`${import.meta.env.BASE_URL}guides/esp32-wifi-csi.html`}>Setup guide ↗</a></p></details>
               {s.wifi.mode === 'serial' && <>
                 <button className="btn btn--primary" disabled={!SerialCsi.supported()} onClick={() => engine.setWifiMode('serial')}>Choose USB device</button>
                 <p className="note" role="status">{s.wifi.message || (SerialCsi.supported() ? 'Choose the ESP32 serial port.' : 'USB access requires desktop Chrome or Edge over HTTPS or localhost.')}</p>
@@ -434,14 +447,17 @@ export default function App() {
               )}
             </section>
             <section>
-              <h2>Detector</h2>
+              <h2>Channel assessment</h2>
+              <div className={`radio-state ${s.wifi.moving ? 'is-active' : ''}`} role="status"><span className="radio-state__mark" aria-hidden="true" /><strong>{radioState}</strong></div>
+              {s.wifi.lastPacketAge >= 0 && s.wifi.lastPacketAge <= 2.5 && s.wifi.calibrationProgress < 1 && <div className="calibration"><progress aria-label="Quiet baseline calibration" value={s.wifi.calibrationProgress} max="1" /><p className="note">Keep the room still for 5 seconds.</p></div>}
               <dl className="facts">
                 <div><dt>Motion index</dt><dd>{fmt1.format(s.wifi.index)} %</dd></div>
                 <div><dt>Score over quiet floor</dt><dd>× {fmt1.format(s.wifi.score)}</dd></div>
                 <div><dt>Received power</dt><dd>{s.wifi.packetsPerSecond === 0 ? '—' : `${Math.round(s.wifi.rssi)} dBm`}</dd></div>
                 <div><dt>Packets</dt><dd>{Math.round(s.wifi.packetsPerSecond)} /s</dd></div>
               </dl>
-              <p className="note">Motion sensing only. No position or room image.</p>
+              <button className="btn btn--wide" disabled={s.wifi.packetsPerSecond === 0} onClick={() => engine.calibrateWifi()}>Recalibrate quiet baseline</button>
+              <p className="note">Motion sensing · position unavailable.</p>
             </section>
           </>
         )}
@@ -462,7 +478,7 @@ export default function App() {
                 hint="Distance between the two capsules, for the bearing" onChange={setSpacing} />
             </section>
             <section>
-              <h2>Detector</h2>
+              <h2>Acoustic assessment</h2>
               <dl className="facts">
                 <div><dt>Level</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.levelDb)} dBFS` : '—'}</dd></div>
                 <div><dt>Noise floor</dt><dd>{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.floorDb)} dBFS` : '—'}</dd></div>
@@ -477,36 +493,30 @@ export default function App() {
       </aside>
 
       <main className={`view view--${feed}`} aria-label={`${feed} instrument`}>
-        <div className="view-heading"><h1>{feed === 'lidar' ? 'Point cloud' : feed === 'wifi' ? 'Channel spectrum' : 'Spectrogram'}</h1><span>{feed === 'lidar' ? sourceLabel : feed === 'wifi' ? s.wifi.mode === 'simulated' ? 'SIMULATION' : s.wifi.packetsPerSecond > 0 ? 'MEASURED CSI' : 'NO CSI INPUT' : s.mic.state === 'on' ? 'MICROPHONE LIVE' : 'MICROPHONE OFF'}</span></div>
+        <div className="view-heading"><h1>{feed === 'lidar' ? 'Point cloud' : feed === 'wifi' ? 'Channel spectrum' : 'Spectrogram'}</h1><div className="view-heading__tools"><button className="btn btn--small btn--quiet expand-view" aria-pressed={expanded} onClick={() => setExpanded(value => !value)} title="Expand the instrument view"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" /></svg>{expanded ? 'Restore layout' : 'Expand view'}</button><span>{feed === 'lidar' ? sourceLabel : feed === 'wifi' ? s.wifi.mode === 'simulated' ? 'SIMULATION' : radioState : s.mic.state === 'on' ? 'MICROPHONE LIVE' : 'MICROPHONE OFF'}</span></div></div>
         <div className="main-signal" hidden={feed !== 'wifi'}>
           <canvas ref={wifiCanvas} aria-label="Measured Wi-Fi subcarrier amplitudes and motion score. No spatial position is inferred." />
-          {s.wifi.mode === 'off' && <div className="signal-empty"><h2>Listen to the channel.</h2><p>ESP32 CSI input required.</p><button className="btn btn--primary" onClick={() => engine.setWifiMode('serial')} disabled={!SerialCsi.supported()}>Connect ESP32 over USB</button><button className="btn btn--quiet" onClick={() => engine.setWifiMode('simulated')}>Explore labelled simulation</button></div>}
+          {s.wifi.mode === 'off' && <div className="signal-empty"><h2>Listen to the channel.</h2><p>Connect an ESP32 to measure changes in your room’s Wi-Fi channel.</p><button className="btn btn--primary" onClick={() => engine.setWifiMode('serial')} disabled={!SerialCsi.supported()}>Connect ESP32 over USB</button><button className="btn btn--quiet" onClick={() => engine.setWifiMode('simulated')}>Explore labelled simulation</button></div>}
         </div>
         <div className="main-signal" hidden={feed !== 'acoustic'}>
           <canvas ref={soundCanvas} aria-label="Live microphone spectrogram and level" />
           {s.mic.state !== 'on' && <div className="signal-empty"><h2>Hear what changes.</h2><p>Live spectrum. Estimated sound events.</p><button className="btn btn--primary" disabled={s.mic.state === 'asking'} onClick={() => engine.listen(true)}>{s.mic.state === 'asking' ? 'Waiting for permission…' : 'Enable microphone'}</button></div>}
         </div>
-        <canvas key={cloudAttempt} ref={canvas} tabIndex={cloudStatus === 'ready' ? 0 : -1} aria-label="3D point cloud. Drag to orbit, scroll to zoom, arrow keys also orbit." />
+        <canvas key={cloudAttempt} ref={canvas} data-renderer={cloudStatus} tabIndex={cloudStatus !== 'unavailable' ? 0 : -1} aria-label="3D point cloud. Drag to orbit, scroll to zoom, arrow keys also orbit." />
         <div ref={labels} className="labels" aria-hidden />
-        {feed === 'lidar' && cloudStatus !== 'ready' && (
-          <div className="cloud-unavailable" role="status">
-            <h2>{cloudStatus === 'lost' ? '3D connection interrupted' : '3D view unavailable'}</h2>
-            <p>{cloudStatus === 'lost'
-              ? 'The browser lost its graphics connection. The 3D view will resume when it recovers.'
-              : 'This browser could not start WebGL 2. Check graphics acceleration in your browser’s system settings, then relaunch the browser, or try another browser with WebGL 2 support.'}</p>
-            <p>Acquisition and the range image below remain available.</p>
-            <button className="btn btn--primary" onClick={() => setCloudAttempt((value) => value + 1)}>Retry 3D view</button>
-          </div>
+        {feed === 'lidar' && cloudStatus === 'software' && <div className="render-state" role="status"><span>CPU · sampled points</span><button className="btn btn--small btn--quiet" onClick={() => { setPreferSoftware(false); setCloudAttempt(value => value + 1) }}>Try GPU</button></div>}
+        {feed === 'lidar' && cloudStatus === 'unavailable' && (
+          <div className="cloud-unavailable" role="status"><h2>Point view unavailable</h2><p>The browser cannot provide a graphics canvas. Acquisition and the range image remain available.</p><button className="btn" onClick={() => setCloudAttempt(value => value + 1)}>Retry view</button></div>
         )}
-        <fieldset className="seg seg--float" aria-label="Camera" disabled={cloudStatus !== 'ready'}>
+        <fieldset className="seg seg--float" aria-label="Camera" disabled={cloudStatus === 'unavailable'}>
           {([['chase', 'Chase'], ['plan', 'Plan'], ['side', 'Side']] as const).map(([id, label], i) => (
             <label key={id} title={`Key ${i + 1}`}><input type="radio" name="camera" checked={camera === id} onChange={() => setCamera(id)} /><span>{label}</span></label>
           ))}
         </fieldset>
-        {feed === 'lidar' && cloudStatus === 'ready' && s.source === 'bridge' && !hasFrames && <Acquisition state={s} connect={() => engine.connectBridge(bridgeUrl)} demo={() => engine.useSimulator()} />}
+        {feed === 'lidar' && cloudStatus !== 'unavailable' && s.source === 'bridge' && !hasFrames && <Acquisition state={s} connect={() => engine.connectBridge(bridgeUrl)} demo={() => engine.useSimulator()} microphone={() => setFeed('acoustic')} />}
         {feed === 'lidar' && s.proximity.ids.length > 0 && <div className="proximity-notice" role="status"><div><strong>Proximity notice{sim || s.stats.simulated ? ' · SIMULATED' : s.source === 'recording' ? ' · REPLAY' : ''}</strong>{s.proximity.ids.length} confirmed track{s.proximity.ids.length === 1 ? '' : 's'} within {s.proximity.radius} m</div><button className="btn btn--small" disabled={s.proximity.acknowledged} onClick={() => engine.acknowledgeProximity()}>{s.proximity.acknowledged ? 'Acknowledged' : 'Acknowledge'}</button></div>}
         {feed === 'lidar' && stale && hasFrames && <div className="stale-input" role="status">Input stale · last frame {Math.floor(s.stats.lastFrameAge)} s ago. Display holds the last measurements.</div>}
-        {feed === 'lidar' && hasFrames && <div className="view-readouts"><span><b>{compact.format(s.stats.pointsPerSecond)}</b> pts/s</span><span><b>{s.stats.seenChannels || (sim ? sensor.channels : '—')}</b> channels</span><span><b>{s.tracks.length}</b> tracks</span><span><b>{compact.format(s.stats.pointsHeld)}</b> points held</span></div>}
+        {feed === 'lidar' && hasFrames && <div className="view-readouts"><span><b>{compact.format(s.stats.pointsPerSecond)}</b> pts/s</span><span><b>{s.stats.seenChannels || (sim ? sensor.channels : '—')}</b> channels</span><span><b>{s.tracks.length}</b> tracks</span><span><b>{compact.format(s.stats.pointsHeld)}</b> {cloudStatus === 'software' ? 'sampled points' : 'points held'}</span></div>}
         {s.source === 'scan' && !s.scan && !s.scanMessage && (
           <div className="empty" role="status"><p className="empty__title">Starting the AR session</p><p>Allow camera access on the phone.</p></div>
         )}
@@ -581,7 +591,7 @@ export default function App() {
             <canvas ref={rangeCanvas} className="rangeimg" aria-label="Range image: one row per channel, one column per bearing" />
           </div>
           <div className="instrument__pane" hidden={feed !== 'wifi'}>
-            <div className="signal-summary"><span className="signal-summary__value">{s.wifi.mode === 'off' ? '—' : s.wifi.moving ? 'Motion' : s.wifi.packetsPerSecond > 0 ? 'Quiet' : 'No input'}</span><span>{Math.round(s.wifi.packetsPerSecond)} packets/s · {s.wifi.packetsPerSecond ? `${Math.round(s.wifi.rssi)} dBm` : 'awaiting packets'}</span><p>Channel change only. No inferred location.</p></div>
+            <div className="signal-summary"><span className="signal-summary__value">{radioState}</span><span>{Math.round(s.wifi.packetsPerSecond)} packets/s · {s.wifi.packetsPerSecond ? `${Math.round(s.wifi.rssi)} dBm` : 'awaiting packets'}</span><p>Channel change only. No inferred location.</p></div>
           </div>
           <div className="instrument__pane" hidden={feed !== 'acoustic'}>
             <div className="signal-summary"><span className="signal-summary__value">{s.mic.state === 'on' ? `${Math.round(engine.listener.analyser.levelDb)} dBFS` : 'Offline'}</span><span>{s.mic.state === 'on' ? s.mic.device : 'Enable the microphone to start'}</span><p>{s.mic.stereo ? 'Stereo input · estimated left/right bearing' : 'Mono input · no bearing available'}</p></div>
@@ -677,7 +687,7 @@ function Slider(props: {
         <span>{props.label}</span>
         <output className="num">{props.decimals ? props.value.toFixed(props.decimals) : props.value}{props.unit && ` ${props.unit}`}</output>
       </span>
-      <input type="range" min={props.min} max={props.max} step={props.step} value={props.value}
+      <input aria-label={props.label} type="range" min={props.min} max={props.max} step={props.step} value={props.value}
         disabled={props.disabled} style={{ '--fill': `${pct}%` } as React.CSSProperties}
         onChange={(e) => props.onChange(Number(e.target.value))} />
       {props.hint && <span className="hint">{props.hint}</span>}
