@@ -1,11 +1,15 @@
 /** Layered CC0 samples and original instrument cues. Never detected-object recordings. */
 export type Cue = 'exhibit' | 'sound' | 'motion' | 'seal' | 'record' | 'connect' | 'disconnect' | 'alert' | 'scan'
 export type CustomCue = 'intro' | 'scan' | 'alert'
+export type AudioProfile = 'field' | 'cinematic'
+export const CUE_LABELS: Record<Cue, string> = { exhibit: 'Object confirmed', sound: 'Acoustic event', motion: 'Radio motion', seal: 'Recording sealed', record: 'Recording started', connect: 'Device connected', disconnect: 'Device disconnected', alert: 'Proximity notice', scan: 'Scan started' }
 export const INTRO_SECONDS = 6.4
 
 export class Cues {
   enabled = false
   volume = 0.35
+  profile: AudioProfile = 'field'
+  muted = new Set<Cue>()
   onPlay: (untilSeconds: number) => void = () => {}
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
@@ -61,12 +65,12 @@ export class Cues {
   clearSound(slot: CustomCue): void { this.samples.delete(`custom-${slot}`); delete this.customNames[slot] }
 
   play(cue: Cue, pan = 0): void {
-    if (!this.enabled || !this.ctx || this.ctx.state !== 'running') return
+    if (!this.enabled || !this.ctx || this.ctx.state !== 'running' || this.muted.has(cue)) return
     const now = performance.now()
     if (this.ctx.currentTime < this.sequenceUntil || now - (this.last.get(cue) ?? -Infinity) < (cue === 'alert' ? 2000 : 650) || this.voices.size > 24) return
     this.last.set(cue, now)
     const t = this.ctx.currentTime + 0.015
-    const duration = cue === 'alert' ? 1.65 : cue === 'scan' ? 1.55 : 0.7
+    const duration = cue === 'alert' ? 1.65 : cue === 'scan' ? 1.55 : this.profile === 'field' ? .35 : .7
     if (this.samples.has(`custom-${cue}`)) this.sample(`custom-${cue}`, t, .6, duration, pan)
     else if (cue === 'scan') {
       this.sample('scan', t, .38, 1.53, pan)
@@ -78,7 +82,7 @@ export class Cues {
         this.noise(t + i * .24, .025, 1800, 1800, .08, 0)
       }
     } else if (cue === 'motion') {
-      this.sample('radar', t, .22, .7, pan)
+      this.sample('radar', t, this.profile === 'field' ? .1 : .22, duration, pan)
       this.tone(165, 155, t, .18, .12, pan)
       this.tone(165, 155, t + .22, .18, .08, pan)
     } else if (cue === 'seal') {
@@ -89,9 +93,11 @@ export class Cues {
       this.noise(t, .2, 1200, 160, .16, 0)
       this.tone(180, 65, t, .24, .18, 0)
     } else {
-      this.noise(t, .04, 2200, 600, .16, pan)
+      this.sample('click', t, .18, .1, pan)
+      this.noise(t, .04, 2200, 600, this.profile === 'field' ? .06 : .16, pan)
       const frequency = cue === 'exhibit' ? 480 : cue === 'sound' ? 380 : cue === 'record' ? 220 : 290
       this.tone(frequency, frequency * .97, t + .025, .12, .1, pan, 'triangle')
+      if (cue === 'exhibit' && this.profile === 'cinematic') { this.sample('confirm', t, .18, .35, pan); this.tone(720, 705, t + .11, .12, .045, pan) }
       if (cue === 'connect') this.noise(t + .13, .04, 1200, 600, .08, pan)
     }
     this.suppressUntil = Math.max(this.suppressUntil, now / 1000 + duration + .1)
@@ -101,9 +107,9 @@ export class Cues {
   private async loadSamples(): Promise<void> {
     const ctx = this.ctx
     if (!ctx) return
-    await Promise.all(['scan', 'radar'].map(async name => {
+    await Promise.all(['scan', 'radar', 'click', 'confirm'].map(async name => {
       try {
-        const response = await fetch(`${import.meta.env.BASE_URL}audio/${name}.mp3`, { signal: AbortSignal.timeout(2500) })
+        const response = await fetch(`${import.meta.env.BASE_URL}audio/${name}.${name === 'click' || name === 'confirm' ? 'ogg' : 'mp3'}`, { signal: AbortSignal.timeout(2500) })
         if (response.ok) {
           const decoded = await ctx.decodeAudioData(await response.arrayBuffer())
           if (this.ctx === ctx) this.samples.set(name, decoded)

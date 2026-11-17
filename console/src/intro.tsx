@@ -34,6 +34,7 @@ function Sideband({ side }: { side: 'left' | 'right' }) {
 
 export const Intro = memo(function Intro({ replay = 0 }: { replay?: number }) {
   const [open, setOpen] = useState(() => {
+    if (replay) return true
     try { return sessionStorage.getItem('fathom.intro.v2') !== 'seen' } catch { return true }
   })
   const [playing, setPlaying] = useState(false)
@@ -52,17 +53,18 @@ export const Intro = memo(function Intro({ replay = 0 }: { replay?: number }) {
     setLoading(false)
     try { sessionStorage.setItem('fathom.intro.v2', 'seen') } catch { /* optional storage */ }
   }, [])
-  useEffect(() => { if (replay) { setOpen(true); setAudioError('') } }, [replay])
   useEffect(() => {
     if (!open) return
     const dialog = panel.current!
+    const timerState = timer
     const previous = document.activeElement as HTMLElement | null
     dialog.showModal()
     const visibility = () => { if (document.hidden) close() }
     document.addEventListener('visibilitychange', visibility)
     return () => {
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- This ref is a generation counter, not a DOM node.
       generation.current++
-      if (timer.current) clearTimeout(timer.current)
+      if (timerState.current) clearTimeout(timerState.current)
       engine.cues.stopSequence()
       dialog.close()
       document.removeEventListener('visibilitychange', visibility)

@@ -92,4 +92,13 @@ describe('audio playback lifecycle', () => {
     cues.play('alert')
     expect(sources).toHaveLength(count)
   })
+  it('keeps disabled event cues silent while other event cues still play', async () => {
+    await cues.prepare()
+    cues.muted.add('motion')
+    cues.play('motion')
+    expect(sources).toHaveLength(0)
+    cues.play('exhibit')
+    expect(sources.length).toBeGreaterThan(0)
+  })
+
 })
